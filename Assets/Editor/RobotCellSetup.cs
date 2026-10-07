@@ -60,36 +60,34 @@ public static class RobotCellSetup
         new Vector3(0, 0, -12), new Vector3(25, 0, -12), new Vector3(-25, 0, -12), new Vector3(50, 0, -12), new Vector3(-50, 0, -12)
     };
 
-    [MenuItem("Allur/Добавить ячейку RobotCell в цех")]
-    public static void AddCellToOpenScene()
+    // первое свободное место (не занятое ни одним процессом: ячейкой, линией колёс и т. д.)
+    public static Vector3 FreeSlot()
     {
-        RobotCell[] existing = Object.FindObjectsByType<RobotCell>();
-
-        Vector3 pos = Vector3.zero;
-        bool found = false;
+        FactoryProcess[] existing = Object.FindObjectsByType<FactoryProcess>();
         foreach (Vector3 slot in Slots)
         {
             bool busy = false;
-            foreach (RobotCell c in existing)
+            foreach (FactoryProcess p in existing)
             {
-                if (Vector3.Distance(c.transform.position, slot) < 5f)
+                Vector3 d = p.transform.position - slot;
+                d.y = 0f;
+                if (d.magnitude < 5f)
                 {
                     busy = true;
                     break;
                 }
             }
-            if (!busy)
-            {
-                pos = slot;
-                found = true;
-                break;
-            }
+            if (!busy) return slot;
         }
-        if (!found)
-        {
-            // все места заняты: ставим рядом с последней, дальше двигай руками
-            pos = existing[existing.Length - 1].transform.position + new Vector3(0, 0, 10);
-        }
+        // все места заняты: ставим рядом с последним, дальше двигай руками
+        return existing.Length > 0 ? existing[existing.Length - 1].transform.position + new Vector3(0, 0, 10) : Vector3.zero;
+    }
+
+    [MenuItem("Allur/Добавить ячейку RobotCell в цех")]
+    public static void AddCellToOpenScene()
+    {
+        RobotCell[] existing = Object.FindObjectsByType<RobotCell>();
+        Vector3 pos = FreeSlot();
 
         GameObject go = new GameObject("RobotCell_" + (existing.Length + 1));
         go.transform.position = pos;

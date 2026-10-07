@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-// Синтетическая статистика одной ячейки RobotCell (цифровой двойник).
-// Данные стабильные: зависят только от имени ячейки и даты, поэтому не "прыгают" между запусками.
+// Синтетическая статистика одного процесса (цифровой двойник).
+// Данные стабильные: зависят только от имени объекта, типа процесса и даты, поэтому не "прыгают" между запусками.
 public class CellStats
 {
     public const float ShiftMinutes = 16f * 60f; // две смены, 07:00–23:00
@@ -12,7 +12,7 @@ public class CellStats
     {
         public DateTime date;
         public int plan, gross, fact, defects, breakdowns, downtimeMin;
-        public float availability, performance, quality, oee, cycleSec, energyKwh, paintL;
+        public float availability, performance, quality, oee, cycleSec, energyKwh, consumable;
     }
 
     public class Breakdown
@@ -22,30 +22,16 @@ public class CellStats
         public int minutes;
     }
 
-    public class Robot
+    public class Unit
     {
-        public string name, role;
+        public string name;
         public int hours, hoursToService;
         public float temp, health;
     }
 
-    public readonly List<Day> days = new List<Day>();          // 30 дней, последний — сегодня
+    public readonly List<Day> days = new List<Day>();                  // 30 дней, последний — сегодня
     public readonly List<Breakdown> breakdowns = new List<Breakdown>(); // новые первыми
-    public readonly Robot[] robots = new Robot[4];
-
-    static readonly string[] Faults =
-    {
-        "Износ электродов сварочных клещей",
-        "Сбой сервопривода оси 2",
-        "Засор форсунки колокола",
-        "Ошибка датчика позиции кузова",
-        "Перегрев трансформатора сварки",
-        "Заклинивание роликовой секции",
-        "Потеря связи с PLC",
-        "Утечка в линии подачи краски",
-        "Срабатывание световой завесы",
-        "Калибровка TCP после касания"
-    };
+    public readonly List<Unit> units = new List<Unit>();
 
     static uint Hash(string s)
     {
@@ -58,12 +44,16 @@ public class CellStats
         return h;
     }
 
-    public static CellStats Generate(string key)
+    public static CellStats Generate(FactoryProcess p)
     {
         CellStats st = new CellStats();
-        System.Random r = new System.Random((int)(Hash(key) & 0x7fffffff));
+        System.Random r = new System.Random((int)(Hash(p.Code + "|" + p.name) & 0x7fffffff));
         DateTime today = DateTime.Today;
-        int basePlan = 360 + r.Next(0, 4) * 12;
+        int basePlan = Mathf.RoundToInt(p.BasePlanPerDay * (1f + r.Next(0, 4) * 0.03f));
+        string[] equipment = p.Equipment;
+        string[] faults = p.Faults;
+        Vector2 energy = p.EnergyPerUnit;
+        Vector2 cons = p.ConsumablePerUnit;
 
         for (int i = 29; i >= 0; i--)
         {
@@ -81,9 +71,8 @@ public class CellStats
                 {
                     Breakdown b = new Breakdown();
                     b.minutes = r.NextDouble() < 0.06 ? 90 + r.Next(0, 150) : 6 + r.Next(0, 55);
-                    int unit = r.Next(0, 5);
-                    b.unit = unit < 4 ? "R-" + (unit + 1) : "Конвейер";
-                    b.what = Faults[r.Next(0, Faults.Length)];
+                    b.unit = equipment[r.Next(0, equipment.Length)];
+                    b.what = faults[r.Next(0, faults.Length)];
                     b.time = d.date.AddMinutes(7 * 60 + r.Next(0, (int)ShiftMinutes));
                     d.downtimeMin += b.minutes;
                     if (b.time <= DateTime.Now) st.breakdowns.Add(b);
@@ -97,26 +86,24 @@ public class CellStats
                 d.quality = d.gross > 0 ? (float)d.fact / d.gross : 1f;
                 d.oee = d.availability * d.performance * d.quality;
                 d.cycleSec = d.gross > 0 ? (ShiftMinutes - d.downtimeMin) * 60f / d.gross : 0f;
-                d.energyKwh = d.gross * (9f + (float)r.NextDouble() * 1.5f);
-                d.paintL = d.gross * (3f + (float)r.NextDouble() * 0.4f);
+                d.energyKwh = d.gross * Mathf.Lerp(energy.x, energy.y, (float)r.NextDouble());
+                d.consumable = d.gross * Mathf.Lerp(cons.x, cons.y, (float)r.NextDouble());
             }
             st.days.Add(d);
         }
         st.breakdowns.Sort((a, b) => b.time.CompareTo(a.time));
 
-        string[] roles = { "Сварка / окраска", "Сварка / окраска", "Сварка / окраска", "Сварка / окраска" };
-        for (int i = 0; i < 4; i++)
+        foreach (string name in equipment)
         {
-            Robot rb = new Robot();
-            rb.name = "R-" + (i + 1);
-            rb.role = roles[i];
-            rb.hours = 6000 + r.Next(0, 12000);
-            rb.hoursToService = 12 + r.Next(0, 480);
-            rb.temp = 38f + (float)r.NextDouble() * 16f;
+            Unit un = new Unit();
+            un.name = name;
+            un.hours = 6000 + r.Next(0, 12000);
+            un.hoursToService = 12 + r.Next(0, 480);
+            un.temp = 34f + (float)r.NextDouble() * 20f;
             int fails = 0;
-            foreach (Breakdown b in st.breakdowns) if (b.unit == rb.name) fails++;
-            rb.health = Mathf.Clamp(0.99f - fails * 0.035f - (float)r.NextDouble() * 0.05f, 0.55f, 0.99f);
-            st.robots[i] = rb;
+            foreach (Breakdown b in st.breakdowns) if (b.unit == name) fails++;
+            un.health = Mathf.Clamp(0.99f - fails * 0.035f - (float)r.NextDouble() * 0.05f, 0.55f, 0.99f);
+            st.units.Add(un);
         }
         return st;
     }
@@ -130,12 +117,12 @@ public class CellStats
     }
 }
 
-// Правая панель со статистикой ячейки. Рисуется через IMGUI, без Canvas.
+// Правая панель со статистикой процесса. Рисуется через IMGUI, без Canvas.
 public class CellSidebar
 {
     public const float LogicalWidth = 420f;
 
-    readonly Dictionary<RobotCell, CellStats> cache = new Dictionary<RobotCell, CellStats>();
+    readonly Dictionary<FactoryProcess, CellStats> cache = new Dictionary<FactoryProcess, CellStats>();
     int selected = 29;
     Vector2 scroll;
     float contentHeight = 1600f;
@@ -160,65 +147,59 @@ public class CellSidebar
         return Mathf.Min(LogicalWidth * Screen.height / 900f, Screen.width * 0.42f);
     }
 
-    public void Open(RobotCell cell)
+    public void Open(FactoryProcess p)
     {
         selected = 29;
         scroll = Vector2.zero;
-        Stats(cell);
+        Stats(p);
     }
 
-    CellStats Stats(RobotCell cell)
+    CellStats Stats(FactoryProcess p)
     {
         CellStats st;
-        if (!cache.TryGetValue(cell, out st))
+        if (!cache.TryGetValue(p, out st))
         {
-            st = CellStats.Generate(cell.name);
-            cache[cell] = st;
+            st = CellStats.Generate(p);
+            cache[p] = st;
         }
         return st;
     }
 
-    // сегодняшний день: факт "к этому часу" + кузова, реально выпущенные ячейкой с момента запуска
-    CellStats.Day Live(CellStats.Day d, RobotCell cell)
+    // сегодняшний день: факт "к этому часу" + изделия, реально выпущенные процессом с момента запуска
+    CellStats.Day Live(CellStats.Day d, FactoryProcess p, CellStats st)
     {
         if (d.date != DateTime.Today || d.plan == 0) return d;
         float f = CellStats.ShiftProgress();
         CellStats.Day t = new CellStats.Day();
         t.date = d.date;
         t.plan = d.plan;
-        int done = Mathf.Max(0, cell.BodyNumber - 1);
-        t.gross = Mathf.RoundToInt(d.gross * f) + done;
+        t.gross = Mathf.RoundToInt(d.gross * f) + Mathf.Max(0, p.CompletedUnits);
         t.defects = Mathf.RoundToInt(d.defects * f);
         t.fact = t.gross - t.defects;
-        int brk = 0, down = 0;
         DateTime now = DateTime.Now;
-        // поломки сегодняшнего дня, которые уже случились
-        var st = Stats(cell);
-        foreach (var b in st.breakdowns)
+        foreach (CellStats.Breakdown b in st.breakdowns)
         {
             if (b.time.Date == d.date && b.time <= now)
             {
-                brk++;
-                down += b.minutes;
+                t.breakdowns++;
+                t.downtimeMin += b.minutes;
             }
         }
-        t.breakdowns = brk;
-        t.downtimeMin = down;
         float elapsed = Mathf.Max(1f, f * CellStats.ShiftMinutes);
-        t.availability = Mathf.Clamp01(1f - down / elapsed);
+        t.availability = Mathf.Clamp01(1f - t.downtimeMin / elapsed);
         t.performance = d.performance;
         t.quality = t.gross > 0 ? (float)t.fact / t.gross : 1f;
         t.oee = t.availability * t.performance * t.quality;
         t.cycleSec = d.cycleSec;
         t.energyKwh = d.gross > 0 ? d.energyKwh / d.gross * t.gross : 0f;
-        t.paintL = d.gross > 0 ? d.paintL / d.gross * t.gross : 0f;
+        t.consumable = d.gross > 0 ? d.consumable / d.gross * t.gross : 0f;
         return t;
     }
 
-    public void Draw(float slide, RobotCell cell)
+    public void Draw(float slide, FactoryProcess p)
     {
-        if (cell == null) return;
-        CellStats st = Stats(cell);
+        if (p == null) return;
+        CellStats st = Stats(p);
 
         if (text == null)
         {
@@ -241,25 +222,25 @@ public class CellSidebar
         Fill(panel, Bg);
         Fill(new Rect(x0, 0, 1, h), new Color(1f, 1f, 1f, 0.12f));
 
-        Rect view = new Rect(x0, 0, LogicalWidth, h);
-        scroll = GUI.BeginScrollView(view, scroll, new Rect(0, 0, LogicalWidth - 14, contentHeight), false, false, GUIStyle.none, scrollbar);
-        float y = DrawContent(cell, st, LogicalWidth - 14);
+        scroll = GUI.BeginScrollView(panel, scroll, new Rect(0, 0, LogicalWidth - 14, contentHeight), false, false, GUIStyle.none, scrollbar);
+        float y = DrawContent(p, st, LogicalWidth - 14);
         contentHeight = y + 20f;
         GUI.EndScrollView();
 
         GUI.matrix = old;
     }
 
-    float DrawContent(RobotCell cell, CellStats st, float w)
+    float DrawContent(FactoryProcess p, CellStats st, float w)
     {
         const float P = 20f;
         float cw = w - P * 2;
         float y = 18f;
 
         // ---------- шапка ----------
-        Text(new Rect(P, y, cw, 16), "ЦИФРОВОЙ ДВОЙНИК · ЯЧЕЙКА R-4", 11, TextDim, TextAnchor.MiddleLeft, true);
+        Text(new Rect(P, y, cw, 16), "ЦИФРОВОЙ ДВОЙНИК · " + p.Code, 11, TextDim, TextAnchor.MiddleLeft, true);
         y += 18;
-        Text(new Rect(P, y, cw, 28), "Сварка и окраска · " + cell.name.Replace("RobotCell_", "№"), 21, TextMain, TextAnchor.MiddleLeft, true);
+        string num = System.Text.RegularExpressions.Regex.Match(p.name, @"\d+$").Value;
+        Text(new Rect(P, y, cw, 28), p.Title + (num.Length > 0 ? " · №" + num : ""), 21, TextMain, TextAnchor.MiddleLeft, true);
         y += 34;
 
         CellStats.Breakdown last = st.breakdowns.Count > 0 ? st.breakdowns[0] : null;
@@ -276,18 +257,18 @@ public class CellSidebar
         Rect live = new Rect(P, y, cw, 74);
         Fill(live, Card);
         Text(new Rect(P + 14, y + 10, 160, 14), "СЕЙЧАС", 10, TextDim, TextAnchor.MiddleLeft, true);
-        Text(new Rect(P + 14, y + 26, 200, 22), cell.PhaseName, 16, PhaseColor(cell), TextAnchor.MiddleLeft, true);
-        string detail = cell.Phase == 1 ? "Точки сварки  " + cell.WeldsDone + " / " + cell.WeldsTotal
-                      : cell.Phase == 2 ? "Покрытие  " + Mathf.RoundToInt(cell.PaintCoverage * 100f) + " %"
-                      : cell.Phase >= 3 ? "Покрытие  100 %" : "Кузов на конвейере";
-        Text(new Rect(P + 14, y + 48, 200, 16), detail, 12, TextDim, TextAnchor.MiddleLeft, false);
-        Text(new Rect(P + cw - 150, y + 10, 136, 14), "КУЗОВ №" + cell.BodyNumber, 10, TextDim, TextAnchor.MiddleRight, true);
-        Fill(new Rect(P + cw - 30, y + 30, 16, 16), cell.PaintColorValue);
-        Text(new Rect(P + cw - 150, y + 28, 112, 20), cell.PaintColorName, 14, TextMain, TextAnchor.MiddleRight, false);
+        Text(new Rect(P + 14, y + 26, cw - 150, 22), p.PhaseName, 16, p.PhaseColor, TextAnchor.MiddleLeft, true);
+        Text(new Rect(P + 14, y + 48, cw - 28, 16), p.LiveDetail, 12, TextDim, TextAnchor.MiddleLeft, false);
+        Text(new Rect(P + cw - 150, y + 10, 136, 14), p.UnitName.ToUpper() + " №" + (p.CompletedUnits + 1), 10, TextDim, TextAnchor.MiddleRight, true);
+        if (p.HasSwatch)
+        {
+            Fill(new Rect(P + cw - 30, y + 30, 16, 16), p.SwatchColor);
+            Text(new Rect(P + cw - 150, y + 28, 112, 20), p.SwatchName, 14, TextMain, TextAnchor.MiddleRight, false);
+        }
         y += 74 + 18;
 
         // ---------- сегодня ----------
-        CellStats.Day today = Live(st.days[29], cell);
+        CellStats.Day today = Live(st.days[29], p, st);
         Section(ref y, P, cw, "Сегодня, " + DateLong(today.date));
         if (today.plan == 0)
         {
@@ -297,32 +278,32 @@ public class CellSidebar
         else
         {
             int planNow = Mathf.RoundToInt(today.plan * CellStats.ShiftProgress());
-            Text(new Rect(P, y, cw / 2, 36), today.fact.ToString(), 32, TextMain, TextAnchor.MiddleLeft, true);
-            Text(new Rect(P, y + 36, cw / 2, 16), "сделано кузовов", 12, TextDim, TextAnchor.MiddleLeft, false);
-            Text(new Rect(P + cw / 2, y, cw / 2, 36), today.plan.ToString(), 32, TextDim, TextAnchor.MiddleRight, true);
+            Text(new Rect(P, y, cw / 2, 36), today.fact.ToString("N0"), 32, TextMain, TextAnchor.MiddleLeft, true);
+            Text(new Rect(P, y + 36, cw / 2, 16), "сделано " + p.UnitNamePlural, 12, TextDim, TextAnchor.MiddleLeft, false);
+            Text(new Rect(P + cw / 2, y, cw / 2, 36), today.plan.ToString("N0"), 32, TextDim, TextAnchor.MiddleRight, true);
             Text(new Rect(P + cw / 2, y + 36, cw / 2, 16), "план на день", 12, TextDim, TextAnchor.MiddleRight, false);
             y += 60;
 
             Rect bar = new Rect(P, y, cw, 10);
             Fill(bar, Line);
-            float pf = today.plan > 0 ? Mathf.Clamp01((float)today.fact / today.plan) : 0f;
+            float pf = Mathf.Clamp01((float)today.fact / today.plan);
             Color pc = today.fact >= planNow * 0.97f ? Good : today.fact >= planNow * 0.9f ? Warn : Bad;
             Fill(new Rect(P, y, cw * pf, 10), pc);
             float mx = P + cw * Mathf.Clamp01((float)planNow / today.plan);
             Fill(new Rect(mx - 1, y - 4, 2, 18), TextMain);
             y += 16;
             int diff = today.fact - planNow;
-            Text(new Rect(P, y, cw, 16), "План к этому часу: " + planNow + "   ·   " + (diff >= 0 ? "опережение +" + diff : "отставание " + diff), 12, diff >= 0 ? Good : Warn, TextAnchor.MiddleLeft, false);
+            Text(new Rect(P, y, cw, 16), "План к этому часу: " + planNow.ToString("N0") + "   ·   " + (diff >= 0 ? "опережение +" + diff.ToString("N0") : "отставание " + diff.ToString("N0")), 12, diff >= 0 ? Good : Warn, TextAnchor.MiddleLeft, false);
             y += 30;
         }
 
         // ---------- график ----------
         Section(ref y, P, cw, "План / факт за 14 дней");
-        y = DrawChart(st, cell, P, y, cw);
+        y = DrawChart(st, p, P, y, cw);
         y += 14;
 
         // ---------- выбранный день ----------
-        CellStats.Day d = Live(st.days[selected], cell);
+        CellStats.Day d = Live(st.days[selected], p, st);
         if (GUI.Button(new Rect(P, y, 28, 26), "◀") && selected > 0) selected--;
         if (GUI.Button(new Rect(P + cw - 28, y, 28, 26), "▶") && selected < 29) selected++;
         Text(new Rect(P + 34, y, cw - 68, 26), DateLong(d.date) + ", " + Dow[(int)d.date.DayOfWeek] + (selected == 29 ? " (сегодня)" : ""), 15, TextMain, TextAnchor.MiddleCenter, true);
@@ -330,7 +311,7 @@ public class CellSidebar
 
         if (d.plan == 0)
         {
-            Text(new Rect(P, y, cw, 20), "Выходной: плановое обслуживание роботов", 13, TextDim, TextAnchor.MiddleLeft, false);
+            Text(new Rect(P, y, cw, 20), "Выходной: плановое обслуживание оборудования", 13, TextDim, TextAnchor.MiddleLeft, false);
             y += 34;
         }
         else
@@ -344,16 +325,16 @@ public class CellSidebar
             Tile(new Rect(P + tw + 10, y, tw, 62), "Качество", d.quality, 0.99f, 0.98f);
             y += 76;
 
-            float done = d.plan > 0 ? (float)d.fact / d.plan : 0f;
-            Row(ref y, P, cw, "План", d.plan + " шт", TextMain);
-            Row(ref y, P, cw, "Факт (годные)", d.fact + " шт", TextMain);
+            float done = (float)d.fact / d.plan;
+            Row(ref y, P, cw, "План", d.plan.ToString("N0") + " шт", TextMain);
+            Row(ref y, P, cw, "Факт (годные)", d.fact.ToString("N0") + " шт", TextMain);
             Row(ref y, P, cw, "Выполнение плана", Mathf.RoundToInt(done * 100f) + " %", done >= 0.97f ? Good : done >= 0.9f ? Warn : Bad);
-            Row(ref y, P, cw, "Брак", d.defects + " шт  (" + (d.gross > 0 ? (d.defects * 100f / d.gross).ToString("0.0") : "0") + " %)", d.defects > d.gross * 0.012f ? Warn : TextMain);
+            Row(ref y, P, cw, "Брак", d.defects.ToString("N0") + " шт  (" + (d.gross > 0 ? (d.defects * 100f / d.gross).ToString("0.0") : "0") + " %)", d.defects > d.gross * 0.012f ? Warn : TextMain);
             Row(ref y, P, cw, "Поломок", d.breakdowns.ToString(), d.breakdowns == 0 ? Good : d.breakdowns > 1 ? Bad : Warn);
             Row(ref y, P, cw, "Простой", d.downtimeMin + " мин", d.downtimeMin > 60 ? Bad : d.downtimeMin > 0 ? Warn : Good);
-            Row(ref y, P, cw, "Средний цикл", d.cycleSec.ToString("0") + " с / кузов", TextMain);
+            Row(ref y, P, cw, "Средний цикл", d.cycleSec.ToString(d.cycleSec < 20f ? "0.0" : "0") + " с / " + p.UnitName, TextMain);
             Row(ref y, P, cw, "Электроэнергия", d.energyKwh.ToString("N0") + " кВт·ч", TextMain);
-            Row(ref y, P, cw, "Краска", d.paintL.ToString("N0") + " л", TextMain);
+            Row(ref y, P, cw, p.ConsumableName, d.consumable.ToString(d.consumable < 100f ? "N1" : "N0") + " " + p.ConsumableUnit, TextMain);
             y += 16;
         }
 
@@ -362,7 +343,7 @@ public class CellSidebar
         int sp = 0, sf = 0, sd = 0, sb = 0, sdown = 0, workDays = 0;
         for (int i = 0; i < 30; i++)
         {
-            CellStats.Day x = Live(st.days[i], cell);
+            CellStats.Day x = Live(st.days[i], p, st);
             sp += x.plan; sf += x.fact; sd += x.defects; sb += x.breakdowns; sdown += x.downtimeMin;
             if (x.plan > 0) workDays++;
         }
@@ -388,25 +369,25 @@ public class CellSidebar
             CellStats.Breakdown b = st.breakdowns[i];
             Color c = b.minutes >= 60 ? Bad : b.minutes >= 25 ? Warn : TextDim;
             Fill(new Rect(P, y + 3, 3, 30), c);
-            Text(new Rect(P + 10, y, 140, 16), b.time.ToString("dd.MM HH:mm") + "  ·  " + b.unit, 11, TextDim, TextAnchor.MiddleLeft, true);
+            Text(new Rect(P + 10, y, cw - 100, 16), b.time.ToString("dd.MM HH:mm") + "  ·  " + b.unit, 11, TextDim, TextAnchor.MiddleLeft, true);
             Text(new Rect(P + cw - 80, y, 80, 16), b.minutes + " мин", 11, c, TextAnchor.MiddleRight, true);
             Text(new Rect(P + 10, y + 17, cw - 10, 18), b.what, 13, TextMain, TextAnchor.MiddleLeft, false);
             y += 42;
         }
         y += 10;
 
-        // ---------- роботы ----------
-        Section(ref y, P, cw, "Состояние роботов");
-        foreach (CellStats.Robot rb in st.robots)
+        // ---------- оборудование ----------
+        Section(ref y, P, cw, "Состояние оборудования");
+        foreach (CellStats.Unit un in st.units)
         {
             Fill(new Rect(P, y, cw, 52), Card);
-            Text(new Rect(P + 12, y + 8, 60, 18), rb.name, 15, TextMain, TextAnchor.MiddleLeft, true);
-            Text(new Rect(P + 62, y + 8, cw - 74, 18), rb.hours.ToString("N0") + " ч наработки  ·  до ТО " + rb.hoursToService + " ч  ·  " + rb.temp.ToString("0") + " °C", 11, rb.hoursToService < 48 ? Warn : TextDim, TextAnchor.MiddleLeft, false);
+            Text(new Rect(P + 12, y + 8, cw - 24, 18), un.name, 14, TextMain, TextAnchor.MiddleLeft, true);
+            Text(new Rect(P + 12, y + 8, cw - 24, 18), un.hours.ToString("N0") + " ч  ·  до ТО " + un.hoursToService + " ч  ·  " + un.temp.ToString("0") + " °C", 11, un.hoursToService < 48 ? Warn : TextDim, TextAnchor.MiddleRight, false);
             Rect hb = new Rect(P + 12, y + 34, cw - 80, 6);
             Fill(hb, Line);
-            Color hc = rb.health >= 0.9f ? Good : rb.health >= 0.75f ? Warn : Bad;
-            Fill(new Rect(hb.x, hb.y, hb.width * rb.health, 6), hc);
-            Text(new Rect(P + cw - 62, y + 28, 50, 18), Mathf.RoundToInt(rb.health * 100f) + " %", 12, hc, TextAnchor.MiddleRight, true);
+            Color hc = un.health >= 0.9f ? Good : un.health >= 0.75f ? Warn : Bad;
+            Fill(new Rect(hb.x, hb.y, hb.width * un.health, 6), hc);
+            Text(new Rect(P + cw - 62, y + 28, 50, 18), Mathf.RoundToInt(un.health * 100f) + " %", 12, hc, TextAnchor.MiddleRight, true);
             y += 60;
         }
         y += 6;
@@ -415,19 +396,19 @@ public class CellSidebar
         return y;
     }
 
-    float DrawChart(CellStats st, RobotCell cell, float x, float y, float w)
+    float DrawChart(CellStats st, FactoryProcess p, float x, float y, float w)
     {
         const float H = 110f;
         int first = 16;
         int max = 1;
-        for (int i = first; i < 30; i++) max = Mathf.Max(max, Mathf.Max(st.days[i].plan, Live(st.days[i], cell).fact));
+        for (int i = first; i < 30; i++) max = Mathf.Max(max, Mathf.Max(st.days[i].plan, Live(st.days[i], p, st).fact));
         float slot = w / 14f;
         float bw = slot * 0.62f;
 
         Fill(new Rect(x, y + H, w, 1), Line);
         for (int i = first; i < 30; i++)
         {
-            CellStats.Day d = Live(st.days[i], cell);
+            CellStats.Day d = Live(st.days[i], p, st);
             float sx = x + (i - first) * slot;
             Rect hit = new Rect(sx, y, slot, H + 18);
             if (i == selected) Fill(hit, new Color(1f, 1f, 1f, 0.06f));
@@ -464,18 +445,6 @@ public class CellSidebar
     }
 
     // ---------- примитивы ----------
-
-    static Color PhaseColor(RobotCell cell)
-    {
-        switch (cell.Phase)
-        {
-            case 0: return Warn;
-            case 1: return new Color(0.4f, 0.65f, 1f);
-            case 2: return cell.PaintColorValue;
-            case 3: return new Color(1f, 0.6f, 0.24f);
-            default: return Good;
-        }
-    }
 
     static string DateLong(DateTime d)
     {

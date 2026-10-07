@@ -10,7 +10,7 @@ using UnityEngine.InputSystem;
 // скрипт строит сам при нажатии Play. Цикл бесконечный: подача → сварка → окраска → сушка → выезд,
 // и дальше следующий кузов другого цвета.
 // Нужен ещё файл CarBodyData.cs (геометрия кузова), он лежит рядом.
-public class RobotCell : MonoBehaviour
+public class RobotCell : FactoryProcess
 {
     [Header("Сцена")]
     [Tooltip("Создать пол, свет, туман и тёмный фон. Выключи, если ячейку кладёшь внутрь готовой сцены.")]
@@ -103,9 +103,36 @@ public class RobotCell : MonoBehaviour
     Rect hudRect = new Rect(0, 0, 0, 0);
     GUIStyle sTitle, sText, sSmall, sBtn;
 
-    // живое состояние ячейки (только чтение, для панели статистики)
-    public int Phase => phase;
-    public string PhaseName => PHASE_NAMES[phase];
+    // ---------- описание процесса для клика, камеры и панели статистики ----------
+    public override string Code => "ЯЧЕЙКА R-4";
+    public override string Title => "Сварка и окраска кузова";
+    public override string UnitName => "кузов";
+    public override string UnitNamePlural => "кузовов";
+    public override string[] PhaseNames => PHASE_NAMES;
+    public override int Phase => phase;
+    public override int CompletedUnits => cycle - 1;
+    public override string LiveDetail =>
+        phase == 1 ? "Точки сварки  " + weldDone + " / " + weldTotal
+        : phase == 2 ? "Покрытие  " + Mathf.RoundToInt(coverage * 100f) + " %"
+        : phase >= 3 ? "Покрытие  100 %" : "Кузов на конвейере";
+    public override Color PhaseColor =>
+        phase == 0 ? Hex(0xf0b323) : phase == 1 ? Hex(0x66a6ff) : phase == 2 ? Hex(COLOR_HEX[colorIdx])
+        : phase == 3 ? Hex(0xff9a3c) : Hex(0x40c773);
+    public override bool HasSwatch => true;
+    public override Color SwatchColor => Hex(COLOR_HEX[colorIdx]);
+    public override string SwatchName => COLOR_NAMES[colorIdx];
+    public override int BasePlanPerDay => 360;
+    public override string[] Equipment => new[] { "R-1", "R-2", "R-3", "R-4", "Конвейер" };
+    public override string[] Faults => new[]
+    {
+        "Износ электродов сварочных клещей", "Сбой сервопривода оси 2", "Засор форсунки колокола",
+        "Ошибка датчика позиции кузова", "Перегрев трансформатора сварки", "Заклинивание роликовой секции",
+        "Потеря связи с PLC", "Утечка в линии подачи краски", "Срабатывание световой завесы",
+        "Калибровка TCP после касания"
+    };
+    public override Bounds LocalBounds => new Bounds(new Vector3(0f, 1.5f, 0f), new Vector3(22f, 3f, 8f));
+
+    // живое состояние ячейки (только чтение)
     public int BodyNumber => cycle;
     public int WeldsDone => weldDone;
     public int WeldsTotal => weldTotal;
@@ -1098,16 +1125,6 @@ public class RobotCell : MonoBehaviour
         Vector2 p = Input.mousePosition;
 #endif
         return new Vector2(p.x, Screen.height - p.y);
-    }
-
-    // рамка в окне Scene: ячейка строится только в Play, а так видно, где она встанет
-    void OnDrawGizmos()
-    {
-        Gizmos.matrix = transform.localToWorldMatrix;
-        Gizmos.color = new Color(0.94f, 0.7f, 0.14f, 1f);
-        Gizmos.DrawWireCube(new Vector3(0f, 1.5f, 0f), new Vector3(22f, 3f, 8f));
-        Gizmos.color = new Color(0.94f, 0.7f, 0.14f, 0.15f);
-        Gizmos.DrawCube(new Vector3(0f, 0.01f, 0f), new Vector3(22f, 0.02f, 8f));
     }
 
     // ======================================================================

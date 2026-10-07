@@ -40,12 +40,23 @@ public class AllurExperience : MonoBehaviour
     public float roofLift = 45f;
     public float roofTime = 1.6f;
 
-    [Header("Осмотр ячейки")]
-    [Tooltip("Габариты ячейки RobotCell для клика (как жёлтая рамка в Scene)")]
-    public Vector3 cellSize = new Vector3(22f, 3f, 8f);
-    public float cellStartDistance = 16f;
-    public float cellMinDistance = 5f;
-    public float cellMaxDistance = 30f;
+    [Header("Скрыть в цехе")]
+    [Tooltip("Объекты здания, которые выключаются при запуске (колонны и балки внутри цеха)")]
+    public string[] hiddenNames = { "Hall_Columns", "Hall_RoofBeams" };
+
+    [Header("Вывеска")]
+    [Tooltip("Блочные буквы из модели, вместо них показывается логотип Assets/Resources/AllurLogo.png")]
+    public string signLettersName = "Sign_ALLUR";
+    [Tooltip("Белая доска вывески, логотип ставится по её центру")]
+    public string signBoardName = "Sign_ALLUR_Board";
+    [Tooltip("Высота логотипа в долях от высоты доски")]
+    [Range(0.3f, 1f)] public float logoHeight = 0.68f;
+
+    [Header("Осмотр процесса")]
+    [Tooltip("Расстояния камеры в долях от размера процесса (длины его большей стороны)")]
+    public float orbitStartFactor = 0.75f;
+    public float orbitMinFactor = 0.25f;
+    public float orbitMaxFactor = 1.4f;
     [Tooltip("Медленный автооблёт, пока не крутишь мышкой (градусов в секунду)")]
     public float cellAutoRotate = 6f;
     public float cellFlightTime = 1.6f;
@@ -81,7 +92,8 @@ public class AllurExperience : MonoBehaviour
 
     // правая панель статистики
     readonly CellSidebar sidebar = new CellSidebar();
-    RobotCell activeCell;
+    FactoryProcess activeCell;
+    float activeSize = 20f;
     bool panelOpen;
     float panelT;   // 0..1, выезд панели
 
@@ -91,8 +103,21 @@ public class AllurExperience : MonoBehaviour
         transform.position = entrancePosition;
         transform.rotation = Quaternion.Euler(entranceEuler);
 
+        foreach (string n in hiddenNames)
+        {
+            GameObject go = GameObject.Find(n);
+            if (go != null)
+            {
+                go.SetActive(false);
+            }
+        }
+
         foreach (string n in roofNames)
         {
+            if (System.Array.IndexOf(hiddenNames, n) >= 0)
+            {
+                continue; // скрытое не поднимаем вместе с крышей, иначе оно включится обратно
+            }
             GameObject go = GameObject.Find(n);
             if (go != null)
             {
@@ -108,6 +133,52 @@ public class AllurExperience : MonoBehaviour
         }
 
         BuildPlate();
+        PlaceLogo();
+    }
+
+    // фирменный логотип на вывеске вместо блочных букв из модели
+    void PlaceLogo()
+    {
+        Texture2D logo = Resources.Load<Texture2D>("AllurLogo");
+        GameObject board = GameObject.Find(signBoardName);
+        Renderer boardRenderer = board != null ? board.GetComponentInChildren<Renderer>() : null;
+        if (logo == null || boardRenderer == null)
+        {
+            Debug.LogWarning("AllurExperience: логотип не поставлен (нет AllurLogo.png в Resources или доски " + signBoardName + ")");
+            return;
+        }
+
+        GameObject letters = GameObject.Find(signLettersName);
+        if (letters != null)
+        {
+            letters.SetActive(false);
+        }
+
+        // доска смотрит на улицу (к камере у входа, в сторону -Z): логотип ставим чуть перед ней
+        Bounds b = boardRenderer.bounds;
+        float h = b.size.y * logoHeight;
+        float w = h * logo.width / logo.height;
+        if (w > b.size.x * 0.9f)
+        {
+            w = b.size.x * 0.9f;
+            h = w * logo.height / logo.width;
+        }
+
+        logo.wrapMode = TextureWrapMode.Clamp;
+        Shader sh = Shader.Find("Sprites/Default");
+        Material mat = new Material(sh);
+        mat.mainTexture = logo;
+
+        GameObject quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        quad.name = "AllurLogo";
+        Destroy(quad.GetComponent<Collider>());
+        quad.transform.position = new Vector3(b.center.x, b.center.y, b.min.z - 0.03f);
+        quad.transform.rotation = Quaternion.identity;   // лицевая сторона Quad смотрит в -Z
+        quad.transform.localScale = new Vector3(w, h, 1f);
+        MeshRenderer mr = quad.GetComponent<MeshRenderer>();
+        mr.sharedMaterial = mat;
+        mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        mr.receiveShadows = false;
     }
 
     void BuildPlate()
@@ -166,7 +237,7 @@ public class AllurExperience : MonoBehaviour
             }
             else if (ClickPressed() && !PointerOverBack())
             {
-                Transform cell = CellUnderPointer();
+                FactoryProcess cell = CellUnderPointer();
                 if (cell != null)
                 {
                     StartCoroutine(EnterCellRoutine(cell));
@@ -188,39 +259,49 @@ public class AllurExperience : MonoBehaviour
 
     // ---------- осмотр ячейки ----------
 
-    // ячейка RobotCell под курсором (луч против её габаритов, коллайдеры не нужны)
-    Transform CellUnderPointer()
+    // процесс под курсором (луч против его габаритов, коллайдеры не нужны)
+    FactoryProcess CellUnderPointer()
     {
         Ray ray = cam.ScreenPointToRay(PointerPosition());
-        RobotCell[] cells = FindObjectsByType<RobotCell>();
-        Transform best = null;
+        FactoryProcess[] cells = FindObjectsByType<FactoryProcess>();
+        FactoryProcess best = null;
         float bestDist = float.MaxValue;
-        Bounds box = new Bounds(new Vector3(0f, cellSize.y * 0.5f, 0f), cellSize);
         for (int i = 0; i < cells.Length; i++)
         {
             Transform t = cells[i].transform;
             Ray local = new Ray(t.InverseTransformPoint(ray.origin), t.InverseTransformDirection(ray.direction));
             float d;
-            if (box.IntersectRay(local, out d) && d < bestDist)
+            if (cells[i].LocalBounds.IntersectRay(local, out d))
             {
-                bestDist = d;
-                best = t;
+                // расстояние сравниваем в мировых единицах (у объектов может быть разный масштаб)
+                float wd = Vector3.Distance(ray.origin, t.TransformPoint(local.GetPoint(d)));
+                if (wd < bestDist)
+                {
+                    bestDist = wd;
+                    best = cells[i];
+                }
             }
         }
         return best;
     }
 
-    IEnumerator EnterCellRoutine(Transform cell)
+    IEnumerator EnterCellRoutine(FactoryProcess cell)
     {
         state = State.Flying;
-        activeCell = cell.GetComponent<RobotCell>();
+        activeCell = cell;
         sidebar.Open(activeCell);
         panelOpen = true;
-        orbitTarget = cell.position + Vector3.up * 1.2f;
-        // начинаем спереди-сбоку ячейки, с учётом её поворота
-        orbitYaw = orbitYawT = (cell.eulerAngles.y + 180f + 35f) * Mathf.Deg2Rad;
+
+        // цель и расстояние подбираем по габаритам процесса
+        Bounds b = cell.LocalBounds;
+        Vector3 worldSize = Vector3.Scale(b.size, cell.transform.lossyScale);
+        activeSize = Mathf.Max(2f, Mathf.Max(worldSize.x, worldSize.z));
+        orbitTarget = cell.transform.TransformPoint(b.center);
+
+        // начинаем спереди-сбоку, с учётом поворота процесса
+        orbitYaw = orbitYawT = (cell.transform.eulerAngles.y + 180f + 35f) * Mathf.Deg2Rad;
         orbitPitch = orbitPitchT = 28f * Mathf.Deg2Rad;
-        orbitDist = orbitDistT = cellStartDistance;
+        orbitDist = orbitDistT = activeSize * orbitStartFactor;
 
         Vector3 pos = OrbitPosition();
         yield return Fly(pos, Quaternion.LookRotation(orbitTarget - pos), cellFlightTime);
@@ -262,7 +343,7 @@ public class AllurExperience : MonoBehaviour
         }
 
         orbitPitchT = Mathf.Clamp(orbitPitchT, 4f * Mathf.Deg2Rad, 85f * Mathf.Deg2Rad);
-        orbitDistT = Mathf.Clamp(orbitDistT, cellMinDistance, cellMaxDistance);
+        orbitDistT = Mathf.Clamp(orbitDistT, activeSize * orbitMinFactor, activeSize * orbitMaxFactor);
 
         float s = 1f - Mathf.Exp(-dt * 10f);
         orbitYaw = Mathf.Lerp(orbitYaw, orbitYawT, s);
