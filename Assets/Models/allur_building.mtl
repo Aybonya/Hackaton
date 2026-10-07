@@ -1,0 +1,256 @@
+newmtl Ground_Asphalt
+Kd 0.270 0.280 0.300
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Lawn
+Kd 0.360 0.520 0.280
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Paving
+Kd 0.620 0.600 0.560
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Marking
+Kd 0.920 0.920 0.900
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Floor_Concrete
+Kd 0.630 0.640 0.650
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Wall_Panel
+Kd 0.860 0.870 0.880
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Wall_Trim
+Kd 0.330 0.350 0.390
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Roof
+Kd 0.520 0.530 0.550
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Skylight
+Kd 0.870 0.930 0.970
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Column
+Kd 0.560 0.570 0.600
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Beam
+Kd 0.460 0.480 0.520
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Gate
+Kd 0.200 0.370 0.570
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Office_Wall
+Kd 0.940 0.940 0.930
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Office_Roof
+Kd 0.500 0.510 0.530
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Glass
+Kd 0.190 0.290 0.370
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Accent_Red
+Kd 0.860 0.160 0.130
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Canopy
+Kd 0.780 0.830 0.860
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Pitch
+Kd 0.220 0.550 0.280
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Tree_Green
+Kd 0.250 0.450 0.200
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Tree_Gold
+Kd 0.820 0.620 0.180
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Tree_Trunk
+Kd 0.350 0.250 0.180
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl CarWhite
+Kd 0.930 0.930 0.930
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl CarSilver
+Kd 0.720 0.740 0.760
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl CarBlack
+Kd 0.100 0.100 0.120
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl CarRed
+Kd 0.720 0.120 0.100
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl CarBlue
+Kd 0.150 0.250 0.500
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Cont_Red
+Kd 0.620 0.200 0.160
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Cont_Orange
+Kd 0.850 0.450 0.150
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Cont_Blue
+Kd 0.200 0.350 0.550
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Cont_Rust
+Kd 0.500 0.300 0.200
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Sign_Red
+Kd 0.850 0.100 0.100
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
+newmtl Sign_White
+Kd 0.960 0.960 0.960
+Ka 0 0 0
+Ks 0.04 0.04 0.04
+Ns 20
+d 1
+illum 2
+
