@@ -27,18 +27,28 @@ public abstract class AnimatedProcess : FactoryProcess
     protected virtual void Start()
     {
         anim = GetComponentInChildren<Animation>();
-        if (anim == null || anim.clip == null)
+        if (anim == null)
         {
-            Debug.LogWarning(name + ": у модели нет анимации Legacy. Выдели FBX в Project → Rig → Animation Type: Legacy → Apply.");
+            string how = GetComponentInChildren<Animator>() != null
+                ? "модель импортирована не как Legacy (на ней Animator)"
+                : "на модели нет компонента Animation";
+            Debug.LogWarning(name + ": " + how + ". Выдели FBX в Project → Rig → Animation Type: Legacy → Apply, затем удали объект и добавь заново через меню Allur.");
             return;
         }
+        anim.cullingType = AnimationCullingType.AlwaysAnimate;
         anim.wrapMode = WrapMode.Loop;
         foreach (AnimationState s in anim)
         {
             s.wrapMode = WrapMode.Loop;
+            if (clip == null) clip = s;   // основной клип не задан — берём первый из списка
         }
-        clip = anim[anim.clip.name];
-        anim.Play(anim.clip.name);
+        if (anim.clip != null) clip = anim[anim.clip.name];
+        if (clip == null)
+        {
+            Debug.LogWarning(name + ": в компоненте Animation нет ни одного клипа. Проверь FBX: Project → Animation → Import Animation.");
+            return;
+        }
+        anim.Play(clip.name);
     }
 
     protected virtual void Update()
