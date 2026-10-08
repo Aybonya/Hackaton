@@ -134,6 +134,12 @@ public class AllurExperience : MonoBehaviour
 
         BuildPlate();
         PlaceLogo();
+
+        // Автоматически подключаем ИИ-Инспектора к камере, если он еще не добавлен в сцену
+        if (FindAnyObjectByType<AllurAIInspector>() == null)
+        {
+            gameObject.AddComponent<AllurAIInspector>();
+        }
     }
 
     // фирменный логотип на вывеске вместо блочных букв из модели
