@@ -117,3 +117,6 @@ InitTestScene*.unity*
 local_api_key.txt
 *.key
 *.secret
+
+# Скриншоты из меню Allur
+/Screenshots/
