@@ -298,7 +298,8 @@ public class AllurAIInspector : MonoBehaviour
 
         if (!string.IsNullOrEmpty(responseContent))
         {
-            // Успешный ответ от OpenAI — выполняем глубокий парсинг структуры
+            // Успешный ответ от OpenAI — очищаем от markdown и выполняем глубокий парсинг
+            responseContent = AIInspectorEngine.CleanMarkdown(responseContent);
             LatestReport = AIInspectorEngine.ParseOpenAIReport(responseContent, snap, model);
             LastApiNotice = "✅ Экспертный аудит успешно сформирован моделью " + model;
         }
@@ -356,7 +357,7 @@ public class AllurAIInspector : MonoBehaviour
         }
 
         string promptText = FactoryTelemetryCollector.BuildTelemetryPromptText(snap,
-            "СФОКУСИРУЙТЕСЬ НА УЗКИХ МЕСТАХ (BOTTLENECK ANALYSIS). Проанализируйте лимитирующий участок, разницу с целевым тактом (45 сек), потери сменного выпуска, состояние входного/выходного буфера, первопричины простоя и пошаговый регламент устранения затора.");
+            "СФОКУСИРУЙТЕСЬ НА УЗКИХ МЕСТАХ (BOTTLENECK ANALYSIS). Проанализируйте лимитирующий участок, разницу с целевым тактом (45 сек), потери сменного выпуска, состояние входного/выходного буфера, первопричины простоя и пошаговый регламент устранения затора. ВАЖНО: пишите чистым текстом без символов markdown # и **.");
         string systemPrompt = AIInspectorEngine.SystemRolePrompt;
 
         string responseContent = null;
@@ -374,6 +375,7 @@ public class AllurAIInspector : MonoBehaviour
 
         if (!string.IsNullOrEmpty(responseContent))
         {
+            responseContent = AIInspectorEngine.CleanMarkdown(responseContent);
             LatestBottleneckReport = AIInspectorEngine.GenerateBottleneckReport(snap, responseContent, model);
             LastApiNotice = "✅ Отчет по узким местам успешно сформирован моделью " + model;
         }
@@ -413,7 +415,7 @@ public class AllurAIInspector : MonoBehaviour
         }
 
         string promptText = FactoryTelemetryCollector.BuildTelemetryPromptText(snap,
-            "СФОКУСИРУЙТЕСЬ НА ПРЕВЕНТИВНОМ ТЕХОБСЛУЖИВАНИИ УЗЛОВ (PREDICTIVE MAINTENANCE). Сформируйте график превентивного ТО, распределите регламентные работы между службами СГМ, РТК и ЭТЛ, укажите требуемый ЗИП, смазки и технологическое окно для обслуживания без остановки потока.");
+            "СФОКУСИРУЙТЕСЬ НА ПРЕВЕНТИВНОМ ТЕХОБСЛУЖИВАНИИ УЗЛОВ (PREDICTIVE MAINTENANCE). Сформируйте график превентивного ТО, распределите регламентные работы между службами СГМ, РТК и ЭТЛ, укажите требуемый ЗИП, смазки и технологическое окно для обслуживания без остановки потока. ВАЖНО: пишите чистым текстом без символов markdown # и **.");
         string systemPrompt = AIInspectorEngine.SystemRolePrompt;
 
         string responseContent = null;
@@ -431,6 +433,7 @@ public class AllurAIInspector : MonoBehaviour
 
         if (!string.IsNullOrEmpty(responseContent))
         {
+            responseContent = AIInspectorEngine.CleanMarkdown(responseContent);
             LatestMaintenanceReport = AIInspectorEngine.GenerateMaintenancePlanReport(snap, responseContent, model);
             LastApiNotice = "✅ План ТО узлов успешно сформирован моделью " + model;
         }
@@ -498,12 +501,14 @@ public class AllurAIInspector : MonoBehaviour
         }
 
         string systemPrompt = AIInspectorEngine.SystemRolePrompt +
-            "\nВы ведете прямой профессиональный диалог с оператором/начальником цеха автозавода Allur. Ответьте емко, конкретно и структурированно на его вопрос, опираясь на текущую телеметрию завода.";
+            "\nВы ведете прямой профессиональный диалог с оператором/начальником цеха автозавода Allur. Ответьте емко, конкретно и структурированно на его вопрос, опираясь на текущую телеметрию завода." +
+            "\nКАТЕГОРИЧЕСКИ ВАЖНО: Отвечайте ЧИСТЫМ ОБЫЧНЫМ ТЕКСТОМ без markdown (#, ##, ###, **, *). НЕ используйте жирный шрифт со звездочками. Разделяйте абзацы пустыми строками, а пункты списка — дефисами (-).";
 
         string userPrompt = $"=== ТЕКУЩИЙ СТАТУС ЗАВОДА ===\n" +
             $"Выпуск: {snap.totalFact}/{snap.totalPlan} авто. OEE: {Mathf.RoundToInt(snap.averageOee * 100f)}%. " +
             $"Простои: {snap.totalDowntimeMin} мин. Узкое место: {snap.bottleneckProcess}. Брак: {snap.totalDefects}.\n\n" +
-            $"ВОПРОС ОПЕРАТОРА: {question}";
+            $"ВОПРОС ОПЕРАТОРА: {question}\n\n" +
+            $"Напоминание: ответ должен быть без звездочек и без решеток, простым чистым текстом.";
 
         string responseContent = null;
         string errorMessage = null;
@@ -520,13 +525,13 @@ public class AllurAIInspector : MonoBehaviour
 
         if (!string.IsNullOrEmpty(responseContent))
         {
-            pendingMsg.text = responseContent;
+            pendingMsg.text = AIInspectorEngine.CleanMarkdown(responseContent);
             pendingMsg.isPending = false;
         }
         else
         {
             string fallback = AIInspectorEngine.GenerateDirectChatAnswer(question, snap);
-            pendingMsg.text = fallback;
+            pendingMsg.text = AIInspectorEngine.CleanMarkdown(fallback);
             pendingMsg.isPending = false;
             if (!string.IsNullOrEmpty(errorMessage))
             {
@@ -1324,7 +1329,8 @@ public class AllurAIInspector : MonoBehaviour
         float totalChatH = 20f;
         for (int i = 0; i < ChatHistory.Count; i++)
         {
-            float textH = GetTextHeight(ChatHistory[i].text, bodyStyle, r.width - 56);
+            string cleanText = AIInspectorEngine.CleanMarkdown(ChatHistory[i].text);
+            float textH = GetTextHeight(cleanText, bodyStyle, r.width - 56);
             totalChatH += textH + bubblePadding + 10f;
         }
 
@@ -1338,7 +1344,8 @@ public class AllurAIInspector : MonoBehaviour
         for (int i = 0; i < ChatHistory.Count; i++)
         {
             var msg = ChatHistory[i];
-            float textH = GetTextHeight(msg.text, bodyStyle, r.width - 56);
+            string cleanText = AIInspectorEngine.CleanMarkdown(msg.text);
+            float textH = GetTextHeight(cleanText, bodyStyle, r.width - 56);
             float bubbleH = textH + bubblePadding;
             Rect bubbleRect = new Rect(6, curY, r.width - 30, bubbleH);
 
@@ -1349,7 +1356,7 @@ public class AllurAIInspector : MonoBehaviour
                 GUI.Label(new Rect(bubbleRect.x + 12, bubbleRect.y + 6, bubbleRect.width - 24, 18), 
                     $"🧑‍💻 Оператор цеха  ·  {msg.timestamp:HH:mm:ss}", subTitleStyle);
                 GUI.Label(new Rect(bubbleRect.x + 12, bubbleRect.y + 26, bubbleRect.width - 24, textH + 4), 
-                    msg.text, boldBodyStyle);
+                    cleanText, boldBodyStyle);
             }
             else
             {
@@ -1363,7 +1370,7 @@ public class AllurAIInspector : MonoBehaviour
                 GUI.Label(new Rect(bubbleRect.x + 12, bubbleRect.y + 6, bubbleRect.width - 24, 18), 
                     header, msg.isPending ? subTitleStyle : sectionHeaderStyle);
                 GUI.Label(new Rect(bubbleRect.x + 12, bubbleRect.y + 26, bubbleRect.width - 24, textH + 4), 
-                    msg.text, bodyStyle);
+                    cleanText, bodyStyle);
             }
 
             curY += bubbleH + 10f;
