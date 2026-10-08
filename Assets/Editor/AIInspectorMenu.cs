@@ -3,6 +3,7 @@ using UnityEngine;
 
 /// <summary>
 /// Пункты меню Unity Editor для быстрой настройки и открытия ИИ-Инспектора Allur.
+/// Гарантирует постоянное наличие компонента инспектора в любом режиме запуска.
 /// </summary>
 [InitializeOnLoad]
 public static class AIInspectorMenu
@@ -14,6 +15,44 @@ public static class AIInspectorMenu
         {
             OpenAIClient.SaveApiKey(OpenAIClient.DefaultApiKey);
         }
+
+        EditorApplication.playModeStateChanged += OnPlayModeChanged;
+        EditorApplication.update += EditorUpdateCheck;
+    }
+
+    private static void OnPlayModeChanged(PlayModeStateChange state)
+    {
+        if (state == PlayModeStateChange.EnteredPlayMode)
+        {
+            AllurAIInspector.EnsureInstanceExists();
+        }
+    }
+
+    private static void EditorUpdateCheck()
+    {
+        if (Application.isPlaying)
+        {
+            if (AllurAIInspector.Instance == null && Object.FindAnyObjectByType<AllurAIInspector>() == null)
+            {
+                AllurAIInspector.EnsureInstanceExists();
+            }
+        }
+    }
+
+    [MenuItem("Allur/Открыть окно ИИ-Инспектора (Play Mode)", priority = 10)]
+    public static void OpenInspectorWindow()
+    {
+        if (!Application.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Allur AI Inspector", "Запустите симуляцию (кнопка Play ▶️ вверху), затем нажмите эту кнопку или клавишу [ I ] / [ Tab ] в окне Game.", "Понятно");
+            return;
+        }
+
+        AllurAIInspector inspector = AllurAIInspector.EnsureInstanceExists();
+        if (inspector != null)
+        {
+            inspector.isWindowOpen = true;
+        }
     }
 
     [MenuItem("Allur/Подключить рабочий OpenAI API ключ", priority = 19)]
@@ -23,7 +62,7 @@ public static class AIInspectorMenu
         if (!string.IsNullOrEmpty(key) && !OpenAIClient.IsPlaceholderKey(key))
         {
             OpenAIClient.SaveApiKey(key);
-            AllurAIInspector inspector = Object.FindAnyObjectByType<AllurAIInspector>();
+            AllurAIInspector inspector = AllurAIInspector.EnsureInstanceExists();
             if (inspector != null)
             {
                 inspector.ApiKey = key;

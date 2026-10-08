@@ -98,6 +98,36 @@ public class AllurAIInspector : MonoBehaviour
         set => forceSimulationMode = value;
     }
 
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStatics()
+    {
+        Instance = null;
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    private static void AutoEnsureInstance()
+    {
+        EnsureInstanceExists();
+    }
+
+    public static AllurAIInspector EnsureInstanceExists()
+    {
+        if (Instance != null) return Instance;
+
+        AllurAIInspector existing = FindAnyObjectByType<AllurAIInspector>();
+        if (existing != null)
+        {
+            Instance = existing;
+            return existing;
+        }
+
+        GameObject go = new GameObject("AllurAIInspector_Manager");
+        existing = go.AddComponent<AllurAIInspector>();
+        DontDestroyOnLoad(go);
+        Debug.Log("[AllurAIInspector] Автоматически создан синглтон ИИ-Инспектора Allur в сцене.");
+        return existing;
+    }
+
     private void Awake()
     {
         if (Instance == null)
