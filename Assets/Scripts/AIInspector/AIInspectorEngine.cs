@@ -488,7 +488,8 @@ public static class AIInspectorEngine
         report.taktTargetSec = 45f;
         report.cycleTimeSec = Mathf.Round(45f + (1f - report.stationOee) * 32f);
         report.taktLagSec = Mathf.Max(0f, report.cycleTimeSec - report.taktTargetSec);
-        report.lostCarsEstimate = Mathf.Max(2, Mathf.RoundToInt((report.taktLagSec / report.taktTargetSec) * Mathf.Max(1, snap.totalFact) + (report.downtimeMin / 2.2f)));
+        // недовыпуск участка за сутки: доля плана, потерянная из-за медленного цикла, плюс машины, не сделанные за время простоя
+        report.lostCarsEstimate = Mathf.Max(1, Mathf.RoundToInt(report.plan * report.taktLagSec / Mathf.Max(1f, report.cycleTimeSec) + report.downtimeMin * 60f / Mathf.Max(1f, report.cycleTimeSec)));
 
         report.bufferUpstream = "⚠️ Буфер ДО узла: ПЕРЕПОЛНЕН (3/3 кузова). Риск аварийного останова предшествующей сварки кузовов.";
         report.bufferDownstream = "⚠️ Буфер ПОСЛЕ узла: ГОЛОДАНИЕ (0/3 кузова). Линия сход-развала и сдачи простаивает в ожидании.";

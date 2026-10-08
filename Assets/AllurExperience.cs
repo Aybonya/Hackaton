@@ -578,6 +578,7 @@ public class AllurExperience : MonoBehaviour
 
     static bool ClickPressed()
     {
+        if (AllurAIInspector.IsModalOpen) return false;   // клик пришёлся в окно ИИ-Инспектора
 #if ENABLE_INPUT_SYSTEM
         return Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame;
 #else
@@ -587,6 +588,7 @@ public class AllurExperience : MonoBehaviour
 
     static bool PointerHeld()
     {
+        if (AllurAIInspector.IsModalOpen) return false;
 #if ENABLE_INPUT_SYSTEM
         return Mouse.current != null && Mouse.current.leftButton.isPressed;
 #else
@@ -625,6 +627,7 @@ public class AllurExperience : MonoBehaviour
 
     static bool EscPressed()
     {
+        if (AllurAIInspector.IsModalOpen) return false;   // Esc сначала закрывает окно ИИ-Инспектора
 #if ENABLE_INPUT_SYSTEM
         return Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame;
 #else

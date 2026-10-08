@@ -391,7 +391,7 @@ public class CellSidebar
             y += 60;
         }
         // ---------- ИИ-Инспектор ----------
-        Section(ref y, P, cw, "Цифровой ИИ-Инспектор");
+        Section(ref y, P, cw, "ИИ-Инспектор");
         DrawAIInspectorSection(p, st, ref y, P, cw);
 
         y += 6;
@@ -403,64 +403,34 @@ public class CellSidebar
     void DrawAIInspectorSection(FactoryProcess p, CellStats st, ref float y, float P, float cw)
     {
         AllurAIInspector inspector = AllurAIInspector.Instance;
-        if (inspector == null)
+        bool busy = inspector != null && inspector.IsAnalyzing;
+
+        Rect card = new Rect(P, y, cw, 120);
+        Fill(card, Card);
+        Pill(new Rect(P + 14, y + 14, busy ? 150 : 128, 22), busy ? "●  Анализирует…" : "●  ИИ на связи", busy ? Warn : Good);
+        Text(new Rect(P + 14, y + 44, cw - 28, 18), "Проверит этот участок: такт, простои, нагрев", 12, TextMain, TextAnchor.MiddleLeft, false);
+        Text(new Rect(P + 14, y + 60, cw - 28, 16), "и износ узлов — и скажет, что сделать.", 12, TextMain, TextAnchor.MiddleLeft, false);
+
+        float bw = (cw - 38) * 0.5f;
+        Rect audit = new Rect(P + 14, y + 84, bw, 26);
+        Fill(audit, busy ? new Color(Accent.r, Accent.g, Accent.b, 0.35f) : Accent);
+        Text(audit, "Проверить участок", 12, Color.white, TextAnchor.MiddleCenter, true);
+        if (GUI.Button(audit, GUIContent.none, GUIStyle.none) && !busy)
         {
-            inspector = UnityEngine.Object.FindAnyObjectByType<AllurAIInspector>();
+            inspector = AllurAIInspector.EnsureInstanceExists();
+            inspector.RunProcessAudit(p);
+            inspector.isWindowOpen = true;
         }
 
-        Rect cardRect = new Rect(P, y, cw, 110);
-        Fill(cardRect, Card);
-
-        // Статус
-        bool isAnalyzing = inspector != null && inspector.IsAnalyzing;
-        string statusText = isAnalyzing ? "ИИ анализирует..." : "● Готов к аудиту ячейки";
-        Color statusColor = isAnalyzing ? Warn : Good;
-        Pill(new Rect(P + 12, y + 10, 150, 20), statusText, statusColor);
-
-        // Индекс процесса
-        Text(new Rect(P + cw - 120, y + 10, 110, 20), "Оценка: " + (st != null && st.days.Count > 0 ? Mathf.RoundToInt(st.days[st.days.Count - 1].oee * 100f) + "% OEE" : "—"), 11, TextDim, TextAnchor.MiddleRight, false);
-
-        // Краткое наставление
-        string hint = isAnalyzing 
-            ? "Идет опрос телеметрии и сопоставление со стандартами Allur..." 
-            : "ИИ оценивает температурные аномалии, наработку узлов и такт.";
-        Text(new Rect(P + 12, y + 36, cw - 24, 28), hint, 11, TextMain, TextAnchor.MiddleLeft, false);
-
-        // Кнопки
-        Rect btnAudit = new Rect(P + 12, y + 70, (cw - 30) * 0.55f, 28);
-        Fill(btnAudit, new Color(Accent.r, Accent.g, Accent.b, 0.25f));
-        Text(btnAudit, "⚡ Аудит ячейки", 11, TextMain, TextAnchor.MiddleCenter, true);
-        if (GUI.Button(btnAudit, GUIContent.none, GUIStyle.none))
+        Rect open = new Rect(P + 24 + bw, y + 84, bw, 26);
+        Fill(open, new Color(1f, 1f, 1f, 0.08f));
+        Text(open, "Открыть ИИ-Инспектор", 12, TextMain, TextAnchor.MiddleCenter, true);
+        if (GUI.Button(open, GUIContent.none, GUIStyle.none))
         {
-            if (inspector == null)
-            {
-                Camera cam = Camera.main;
-                if (cam != null) inspector = cam.gameObject.AddComponent<AllurAIInspector>();
-            }
-            if (inspector != null)
-            {
-                inspector.RunProcessAudit(p);
-                inspector.isWindowOpen = true;
-            }
+            AllurAIInspector.EnsureInstanceExists().ToggleWindow();
         }
 
-        Rect btnOpen = new Rect(P + 18 + btnAudit.width, y + 70, (cw - 30) * 0.45f, 28);
-        Fill(btnOpen, new Color(1f, 1f, 1f, 0.08f));
-        Text(btnOpen, "Панель ИИ [ I ]", 11, TextDim, TextAnchor.MiddleCenter, true);
-        if (GUI.Button(btnOpen, GUIContent.none, GUIStyle.none))
-        {
-            if (inspector == null)
-            {
-                Camera cam = Camera.main;
-                if (cam != null) inspector = cam.gameObject.AddComponent<AllurAIInspector>();
-            }
-            if (inspector != null)
-            {
-                inspector.ToggleWindow();
-            }
-        }
-
-        y += 118;
+        y += 128;
     }
 
     float DrawChart(CellStats st, FactoryProcess p, float x, float y, float w)
