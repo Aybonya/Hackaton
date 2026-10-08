@@ -42,6 +42,59 @@ public static class AIInspectorEngine
         public string sourceName;
     }
 
+    [Serializable]
+    public class BottleneckReport
+    {
+        public DateTime timestamp;
+        public string sourceName;
+        public string bottleneckStation;
+        public string bottleneckCode;
+        public float stationOee;
+        public int downtimeMin;
+        public int completedUnits;
+        public int plan;
+        public int fact;
+        public float taktTargetSec;
+        public float cycleTimeSec;
+        public float taktLagSec;
+        public int lostCarsEstimate;
+        public string bufferUpstream;
+        public string bufferDownstream;
+        public List<string> rootCauses = new List<string>();
+        public List<string> actionSteps = new List<string>();
+        public string rawAiAnalysis;
+    }
+
+    [Serializable]
+    public class MaintenanceTask
+    {
+        public string stationName;
+        public string unitName;
+        public int operatingHours;
+        public int hoursToService;
+        public float temperature;
+        public float health; // 0..1
+        public string urgencyText; // "🔴 СРОЧНО (<24ч)", "🟡 ВНИМАНИЕ (<72ч)", "🟢 ПЛАНОВО"
+        public Color urgencyColor;
+        public string department; // "[СГМ] Механики", "[РТК] Роботы", "[ЭТЛ] Электрики"
+        public string procedure;
+        public string partsAndConsumables;
+    }
+
+    [Serializable]
+    public class MaintenancePlanReport
+    {
+        public DateTime timestamp;
+        public string sourceName;
+        public int criticalCount;
+        public int warningCount;
+        public int scheduledCount;
+        public List<MaintenanceTask> tasks = new List<MaintenanceTask>();
+        public List<string> sparePartsSummary = new List<string>();
+        public string generalGuidelines;
+        public string rawAiAnalysis;
+    }
+
     /// <summary>
     /// Парсит и структурирует ответ языковой модели OpenAI, извлекая уровни тревоги,
     /// краткую сводку, список предупреждений и конкретные рекомендации.
@@ -381,26 +434,252 @@ public static class AIInspectorEngine
         return report;
     }
 
-    private static string GenerateCustomQueryAnswer(string query, FactoryTelemetryCollector.FactorySnapshot snap)
+    /// <summary>
+    /// Генерирует глубокий отчет по узким местам (Bottleneck) и такту линии.
+    /// </summary>
+    public static BottleneckReport GenerateBottleneckReport(FactoryTelemetryCollector.FactorySnapshot snap, string openAiRawText = null, string model = null)
     {
-        string q = query.ToLowerInvariant();
-        if (q.Contains("oee") || q.Contains("эффективн"))
+        BottleneckReport report = new BottleneckReport
         {
-            return $"Для повышения среднего OEE (текущий {Mathf.RoundToInt(snap.averageOee * 100f)}%) критически важно сократить простои на участке «{snap.bottleneckProcess}». Рекомендуется переход с реактивного ремонта на виброакустический мониторинг подшипников.";
-        }
-        if (q.Contains("узк") || q.Contains("проблем") || q.Contains("бутылочн"))
+            timestamp = DateTime.Now,
+            sourceName = !string.IsNullOrEmpty(openAiRawText) ? $"OpenAI Cloud ({model ?? "gpt-4o-mini"})" : "Экспертный ИИ-Инспектор Allur",
+            rawAiAnalysis = openAiRawText
+        };
+
+        if (snap == null) return report;
+
+        // Поиск процесса с наихудшими показателями
+        FactoryTelemetryCollector.ProcessTelemetry worstProc = null;
+        float minOee = 2f;
+        foreach (var p in snap.processes)
         {
-            return $"Главным узким местом цеха в данный момент является {snap.bottleneckProcess}. Задержки на этом участке сдерживают общий такт выпуска остальных постов.";
-        }
-        if (q.Contains("то") || q.Contains("ремонт") || q.Contains("обслуживан"))
-        {
-            return "Анализ наработки указывает на необходимость превентивного сервиса для узлов с остатком менее 48 часов на постах сварки и конвейерных транспортерах.";
-        }
-        if (q.Contains("брак") || q.Contains("качеств") || q.Contains("дефект"))
-        {
-            return $"Уровень брака зафиксирован на отметке {snap.totalDefects} единиц. Рекомендуется калибровка сварочных электродов и проверка вязкости праймера для стекла.";
+            if (p.plan > 0 && p.oee < minOee)
+            {
+                minOee = p.oee;
+                worstProc = p;
+            }
         }
 
-        return $"По вашему запросу «{query}»: производственная линия функционирует стабильно (индекс {snap.factoryHealthScore:F0}%). Рекомендуется следовать регламенту сменного задания.";
+        if (worstProc == null && snap.processes.Count > 0)
+        {
+            worstProc = snap.processes[0];
+        }
+
+        if (worstProc != null)
+        {
+            report.bottleneckStation = worstProc.title;
+            report.bottleneckCode = worstProc.code;
+            report.stationOee = worstProc.oee;
+            report.downtimeMin = worstProc.downtimeMin;
+            report.completedUnits = worstProc.completedUnits;
+            report.plan = worstProc.plan;
+            report.fact = worstProc.fact;
+        }
+        else
+        {
+            report.bottleneckStation = !string.IsNullOrEmpty(snap.bottleneckProcess) ? snap.bottleneckProcess : "Линия сборки колес";
+            report.bottleneckCode = "WHEEL-01";
+            report.stationOee = 0.72f;
+            report.downtimeMin = 35;
+            report.plan = 22;
+            report.fact = 14;
+        }
+
+        report.taktTargetSec = 45f;
+        report.cycleTimeSec = Mathf.Round(45f + (1f - report.stationOee) * 32f);
+        report.taktLagSec = Mathf.Max(0f, report.cycleTimeSec - report.taktTargetSec);
+        report.lostCarsEstimate = Mathf.Max(2, Mathf.RoundToInt((report.taktLagSec / report.taktTargetSec) * Mathf.Max(1, snap.totalFact) + (report.downtimeMin / 2.2f)));
+
+        report.bufferUpstream = "⚠️ Буфер ДО узла: ПЕРЕПОЛНЕН (3/3 кузова). Риск аварийного останова предшествующей сварки кузовов.";
+        report.bufferDownstream = "⚠️ Буфер ПОСЛЕ узла: ГОЛОДАНИЕ (0/3 кузова). Линия сход-развала и сдачи простаивает в ожидании.";
+
+        report.rootCauses.Add($"🔴 Пневматика/Механика: Падение давления в цеховой магистрали затяжки до 5.1 бар (норма 6.2 бар), увеличение времени зажима.");
+        report.rootCauses.Add($"🟡 Кинематика узла: Температурный дрейф привода подачи (t = 53°C), задержка позиционирования на +{report.taktLagSec:F0} сек.");
+        report.rootCauses.Add($"🟡 Внутрицеховая логистика: Неритмичная доставка крепежных метизов и ступичных гаек со склада операторами Just-in-Time.");
+
+        report.actionSteps.Add($"1. Дежурному механику [СГМ]: Отрегулировать входной редуктор пневмолинии поста «{report.bottleneckStation}» до 6.2–6.4 бар.");
+        report.actionSteps.Add($"2. Наладчику [РТК]: Проверить концевые датчики каретки и скорректировать ускорение сервопривода (снижение времени цикла на ~5 сек).");
+        report.actionSteps.Add($"3. Логистической службе: Сформировать оперативный буфер крепежа на 10 циклов непосредственно в зоне оператора поста.");
+        report.actionSteps.Add($"4. Сменному мастеру: Перераспределить операцию предварительной наживки на вспомогательный пост для выравнивания такта.");
+
+        if (string.IsNullOrEmpty(report.rawAiAnalysis))
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine($"### 🔍 ЭКСПЕРТНЫЙ АНАЛИЗ УЗКОГО МЕСТА: {report.bottleneckStation.ToUpper()} ({report.bottleneckCode})");
+            sb.AppendLine($"• Лимитирующий фактор цеха: Текущий OEE участка составляет **{Mathf.RoundToInt(report.stationOee * 100f)}%**, время простоя за смену: **{report.downtimeMin} мин**.");
+            sb.AppendLine($"• Рассинхронизация такта: Фактический цикл **{report.cycleTimeSec:F0} сек** превышает целевой такт линии (**{report.taktTargetSec:F0} сек**) на **+{report.taktLagSec:F0} сек** на каждое авто.");
+            sb.AppendLine($"• Оценка потерь сменного выпуска: Недополучено порядка **{report.lostCarsEstimate} готовых автомобилей** из-за рассинхронизации.");
+            sb.AppendLine();
+            sb.AppendLine("### ⚠️ ВЛИЯНИЕ НА ТЕХНОЛОГИЧЕСКИЙ ПОТОК");
+            sb.AppendLine("Задержка на данном посте блокирует конвейер Allur, вызывая затор на входе и технологическое голодание на финишных линиях сход-развала и сдачи ОТК.");
+            report.rawAiAnalysis = sb.ToString();
+        }
+
+        return report;
+    }
+
+    /// <summary>
+    /// Генерирует детальный график превентивного ТО узлов оборудования цеха.
+    /// </summary>
+    public static MaintenancePlanReport GenerateMaintenancePlanReport(FactoryTelemetryCollector.FactorySnapshot snap, string openAiRawText = null, string model = null)
+    {
+        MaintenancePlanReport report = new MaintenancePlanReport
+        {
+            timestamp = DateTime.Now,
+            sourceName = !string.IsNullOrEmpty(openAiRawText) ? $"OpenAI Cloud ({model ?? "gpt-4o-mini"})" : "Экспертный ИИ-Инспектор Allur",
+            rawAiAnalysis = openAiRawText
+        };
+
+        if (snap == null) return report;
+
+        foreach (var p in snap.processes)
+        {
+            foreach (var u in p.units)
+            {
+                MaintenanceTask task = new MaintenanceTask
+                {
+                    stationName = p.title,
+                    unitName = u.name,
+                    operatingHours = u.hours,
+                    hoursToService = u.hoursToService,
+                    temperature = u.temp,
+                    health = u.health
+                };
+
+                // Определение срочности
+                if (u.hoursToService < 24 || u.health < 0.65f || u.temp > 55f)
+                {
+                    task.urgencyText = "🔴 СРОЧНО (<24ч)";
+                    task.urgencyColor = new Color(0.94f, 0.28f, 0.28f);
+                    report.criticalCount++;
+                }
+                else if (u.hoursToService < 72 || u.health < 0.80f || u.temp > 48f)
+                {
+                    task.urgencyText = "🟡 ВНИМАНИЕ (<72ч)";
+                    task.urgencyColor = new Color(0.96f, 0.72f, 0.15f);
+                    report.warningCount++;
+                }
+                else
+                {
+                    task.urgencyText = "🟢 ПЛАНОВО";
+                    task.urgencyColor = new Color(0.18f, 0.8f, 0.45f);
+                    report.scheduledCount++;
+                }
+
+                // Определение службы
+                string nLow = u.name.ToLowerInvariant();
+                if (nLow.Contains("робот") || nLow.Contains("серво") || nLow.Contains("манипулятор") || nLow.Contains("захват") || nLow.Contains("kuka"))
+                {
+                    task.department = "[РТК] Робототехники";
+                    task.procedure = "Вибродиагностика привода, юстировка энкодера, проверка кабельного шлейфа, контроль температуры.";
+                    task.partsAndConsumables = "Кабельный гибкий шлейф Igus, высокотемпературная смазка Mobilith SHC 220.";
+                }
+                else if (nLow.Contains("редуктор") || nLow.Contains("транспортер") || nLow.Contains("каретка") || nLow.Contains("шпиндель") || nLow.Contains("пневм"))
+                {
+                    task.department = "[СГМ] Механики";
+                    task.procedure = "Проверка люфтов зубчатых зацеплений, слив/замена редукторного масла, замена уплотнительных манжет.";
+                    task.partsAndConsumables = "Масло редукторное Shell Omala S4 WE 320 (3 л), комплект сальников 45х65.";
+                }
+                else
+                {
+                    task.department = "[ЭТЛ] Электрики";
+                    task.procedure = "Протяжка клеммников силового шкафа, продувка воздушных фильтров теплообменника ПЧ, калибровка датчиков.";
+                    task.partsAndConsumables = "Фильтрующие маты Rittal, термопаста КПТ-19, предохранители 25A.";
+                }
+
+                report.tasks.Add(task);
+            }
+        }
+
+        // Сортировка: сначала самые критические по остатку до ТО
+        report.tasks.Sort((a, b) => a.hoursToService.CompareTo(b.hoursToService));
+
+        report.sparePartsSummary.Add("• Редукторное синтетическое масло Shell Omala S4 WE 320 — 10 л (для приводов и конвейеров).");
+        report.sparePartsSummary.Add("• Высокотемпературная литиевая пластичная смазка Mobilith SHC 220 — 4 картриджа.");
+        report.sparePartsSummary.Add("• Комплект уплотнений пневмоцилиндров Festo DNC-63 — 2 ремкомплекта.");
+        report.sparePartsSummary.Add("• Индуктивные датчики приближения Pepperl+Fuchs M12 — 3 шт.");
+
+        if (string.IsNullOrEmpty(report.rawAiAnalysis))
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("### 🛠️ РЕГЛАМЕНТ ПРОВЕДЕНИЯ ПРЕВЕНТИВНОГО ТО СЛУЖБАМИ ЦЕХА");
+            sb.AppendLine($"• Состояние парка оборудования: критических узлов — **{report.criticalCount}**, предупредительных — **{report.warningCount}**, штатных — **{report.scheduledCount}**.");
+            sb.AppendLine("• **Технологическое окно:** проведение работ запланировано в межсменный перерыв без остановки основного конвейера цеха.");
+            sb.AppendLine("• **Протокол безопасности:** обязательное отключение силовых фидеров по стандарту LOTO (Lockout/Tagout) перед ревизией редукторов.");
+            sb.AppendLine("• **Приемка ОТК:** после замены смазки и калибровки обязателен тестовый прогон узла на холостом ходу в течение 10 минут с тепловизионным контролем.");
+            report.rawAiAnalysis = sb.ToString();
+        }
+
+        return report;
+    }
+
+    /// <summary>
+    /// Генерирует прямой детальный ответ на любой вопрос оператора по телеметрии завода.
+    /// </summary>
+    public static string GenerateDirectChatAnswer(string query, FactoryTelemetryCollector.FactorySnapshot snap)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return "Пожалуйста, введите ваш вопрос.";
+        string q = query.ToLowerInvariant();
+
+        if (q.Contains("oee") || q.Contains("эффективн") || q.Contains("производительн"))
+        {
+            return $"📊 **Текущий OEE автозавода Allur: {Mathf.RoundToInt(snap.averageOee * 100f)}%** (целевой норматив ≥ 85%).\n\n" +
+                   $"Основной резерв роста эффективности (+5–7% к OEE) кроется в устранении микропростоев на участке «{snap.bottleneckProcess}». " +
+                   $"Суммарный простой оборудования за смену уже достиг {snap.totalDowntimeMin} мин.\n\n" +
+                   $"💡 **Рекомендации инспектора:**\n" +
+                   $"1. Выровнять межоперационный буфер накопителя до 3 кузовов;\n" +
+                   $"2. Провести внеочередную ревизию пневматических зажимов;\n" +
+                   $"3. Исключить задержки подачи метизов и колес со склада Just-in-Time.";
+        }
+
+        if (q.Contains("узк") || q.Contains("бутылочн") || q.Contains("bottleneck") || q.Contains("проблем") || q.Contains("затор"))
+        {
+            return $"🔍 **Главное узкое место цеха — участок «{snap.bottleneckProcess}».**\n\n" +
+                   $"На этом посту фиксируется наибольшая задержка такта по сравнению с остальными операциями завода. " +
+                   $"Из-за этого входной накопитель перед участком переполнен (3/3 кузова), а последующие посты испытывают голодание деталей.\n\n" +
+                   $"👉 *Для детального ознакомления с первопричинами и пошаговым планом перейдите во вкладку «🔍 Узкие места».*";
+        }
+
+        if (q.Contains("то") || q.Contains("обслуживан") || q.Contains("ремонт") || q.Contains("сгм") || q.Contains("механик") || q.Contains("износ"))
+        {
+            return $"🛠️ **План превентивного техобслуживания узлов:**\n\n" +
+                   $"По данным телеметрии, ряд сервоприводов и редукторов имеют остаток ресурса до ТО менее 48 моточасов. " +
+                   $"Службе главного механика [СГМ] и наладчикам [РТК] рекомендовано провести вибродиагностику и доливку редукторного масла в ближайший технологический перерыв смены.\n\n" +
+                   $"👉 *Полный интерактивный график и список узлов доступен во вкладке «🛠️ План ТО узлов».*";
+        }
+
+        if (q.Contains("брак") || q.Contains("качеств") || q.Contains("дефект") || q.Contains("отк"))
+        {
+            return $"🛡️ **Контроль качества выпуска:**\n\n" +
+                   $"За текущую смену зафиксировано {snap.totalDefects} единиц с отклонениями по качеству при общем выпуске {snap.totalFact} авто.\n\n" +
+                   $"💡 **Ключевые зоны внимания:**\n" +
+                   $"• Герметизация краевого шва стекол (проверить давление в дозаторе праймера и вязкость герметика);\n" +
+                   $"• Соосность установки колес на лазерном стенде сход-развала Wheel Aligner.";
+        }
+
+        if (q.Contains("робот") || q.Contains("температур") || q.Contains("нагрев") || q.Contains("перегрев"))
+        {
+            return $"🌡️ **Термический режим робототехники:**\n\n" +
+                   $"В роботизированной ячейке сварки RobotCell приводы манипуляторов работают в плотном цикле с температурой до 54-58°C. " +
+                   $"Критический порог аварийного останова — 65°C.\n\n" +
+                   $"💡 Рекомендуется оптимизировать кривые разгона/торможения роботов KUKA/Fanuc, что снизит пиковые нагрузки на двигатели и понизит температуру на 10-12%.";
+        }
+
+        if (q.Contains("план") || q.Contains("выпуск") || q.Contains("смен") || q.Contains("авто"))
+        {
+            return $"📦 **Выполнение сменного задания:**\n\n" +
+                   $"Собрано **{snap.totalFact} из {snap.totalPlan}** автомобилей (прогресс текущей смены: {Mathf.RoundToInt(snap.shiftProgress * 100f)}%). " +
+                   $"Индекс надежности цеха: **{snap.factoryHealthScore:F1}%**.\n\n" +
+                   $"При оперативной стабилизации такта на узком месте сменный план завода Allur будет успешно выполнен.";
+        }
+
+        return $"🤖 **Ответ Инспектора Allur на запрос:** «{query}»\n\n" +
+               $"Текущее состояние производства: завод функционирует в штатно-напряженном режиме (индекс здоровья {snap.factoryHealthScore:F0}%). " +
+               $"Собрано {snap.totalFact} из {snap.totalPlan} авто. Главный фокус внимания инженеров — стабилизация такта на участке «{snap.bottleneckProcess}» и превентивный контроль ресурса узлов до ТО.";
+    }
+
+    private static string GenerateCustomQueryAnswer(string query, FactoryTelemetryCollector.FactorySnapshot snap)
+    {
+        return GenerateDirectChatAnswer(query, snap);
     }
 }

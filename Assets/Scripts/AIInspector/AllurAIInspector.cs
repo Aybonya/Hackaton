@@ -35,17 +35,38 @@ public class AllurAIInspector : MonoBehaviour
 
     // Состояние анализа
     public bool IsAnalyzing { get; private set; }
+    public bool IsBottleneckAnalyzing { get; private set; }
+    public bool IsMaintenanceAnalyzing { get; private set; }
+    public bool IsChatResponding { get; private set; }
+
     public AIInspectorEngine.AuditReport LatestReport { get; private set; }
+    public AIInspectorEngine.BottleneckReport LatestBottleneckReport { get; private set; }
+    public AIInspectorEngine.MaintenancePlanReport LatestMaintenanceReport { get; private set; }
     public string LastApiNotice { get; private set; }
     public float FactoryHealthScore => LatestReport != null ? LatestReport.factoryHealthScore : 92.5f;
+
+    [Serializable]
+    public class ChatMessage
+    {
+        public enum SenderType { Operator, AI, System }
+        public SenderType sender;
+        public string text;
+        public DateTime timestamp;
+        public bool isPending;
+    }
+
+    public List<ChatMessage> ChatHistory { get; private set; } = new List<ChatMessage>();
 
     // Внутренние переменные UI
     private float autoTimer = 0f;
     private string customQuestionInput = "";
     private string apiKeyInput = "";
-    private int activeTab = 0; // 0 - Аудит, 1 - Диалог, 2 - Узлы/Телеметрия, 3 - Настройки
+    private int activeTab = 0; // 0 - Сводка, 1 - Узкие места, 2 - План ТО, 3 - Чат, 4 - Настройки
     private Vector2 reportScroll = Vector2.zero;
-    private Vector2 unitsScroll = Vector2.zero;
+    private Vector2 bottleneckScroll = Vector2.zero;
+    private Vector2 maintenanceScroll = Vector2.zero;
+    private Vector2 chatScroll = Vector2.zero;
+    private Vector2 settingsScroll = Vector2.zero;
     private Rect windowRect;
     private bool stylesInitialized = false;
 
@@ -99,6 +120,25 @@ public class AllurAIInspector : MonoBehaviour
 
     private void Start()
     {
+        // Инициализация первичных отчетов, чтобы ни одна вкладка не была пустой
+        var snap = FactoryTelemetryCollector.CollectSnapshot();
+        LatestReport = AIInspectorEngine.GenerateSimulatedAudit(snap);
+        LatestBottleneckReport = AIInspectorEngine.GenerateBottleneckReport(snap);
+        LatestMaintenanceReport = AIInspectorEngine.GenerateMaintenancePlanReport(snap);
+
+        if (ChatHistory.Count == 0)
+        {
+            ChatHistory.Add(new ChatMessage
+            {
+                sender = ChatMessage.SenderType.AI,
+                text = "👋 Здравствуйте! Я Цифровой ИИ-Инспектор автозавода Allur.\n" +
+                       "Я непрерывно отслеживаю телеметрию технологических постов (сварка кузовов RobotCell, вклейка стекол, сборка колес, сход-развал, цеховая логистика).\n\n" +
+                       "Задайте мне любой вопрос о текущем состоянии цеха, рисках срыва плана, причинах простоев или рекомендациях по оборудованию.",
+                timestamp = DateTime.Now,
+                isPending = false
+            });
+        }
+
         // Первичный экспресс-аудит завода при старте
         RunFactoryAudit(null);
     }
@@ -251,6 +291,220 @@ public class AllurAIInspector : MonoBehaviour
         }
 
         IsAnalyzing = false;
+    }
+
+    /// <summary>
+    /// Запуск углубленного анализа узких мест и такта линии цеха.
+    /// </summary>
+    public void RunBottleneckAnalysis()
+    {
+        if (IsBottleneckAnalyzing) return;
+        StartCoroutine(ExecuteBottleneckRoutine());
+    }
+
+    private IEnumerator ExecuteBottleneckRoutine()
+    {
+        IsBottleneckAnalyzing = true;
+        LastApiNotice = "🔍 Запущен углубленный анализ узких мест цеха...";
+
+        var snap = FactoryTelemetryCollector.CollectSnapshot();
+        bool useSimulation = forceSimulationMode || OpenAIClient.IsPlaceholderKey(apiKey);
+
+        if (useSimulation)
+        {
+            yield return new WaitForSeconds(0.4f);
+            LatestBottleneckReport = AIInspectorEngine.GenerateBottleneckReport(snap);
+            LastApiNotice = "✅ Отчет по узким местам сформирован: «" + LatestBottleneckReport.bottleneckStation + "»";
+            IsBottleneckAnalyzing = false;
+            yield break;
+        }
+
+        string promptText = FactoryTelemetryCollector.BuildTelemetryPromptText(snap,
+            "СФОКУСИРУЙТЕСЬ НА УЗКИХ МЕСТАХ (BOTTLENECK ANALYSIS). Проанализируйте лимитирующий участок, разницу с целевым тактом (45 сек), потери сменного выпуска, состояние входного/выходного буфера, первопричины простоя и пошаговый регламент устранения затора.");
+        string systemPrompt = AIInspectorEngine.SystemRolePrompt;
+
+        string responseContent = null;
+        string errorMessage = null;
+
+        yield return OpenAIClient.SendChatRequest(
+            apiKey,
+            model,
+            systemPrompt,
+            promptText,
+            requestTimeoutSeconds,
+            onSuccess: (text) => responseContent = text,
+            onError: (err) => errorMessage = err
+        );
+
+        if (!string.IsNullOrEmpty(responseContent))
+        {
+            LatestBottleneckReport = AIInspectorEngine.GenerateBottleneckReport(snap, responseContent, model);
+            LastApiNotice = "✅ Отчет по узким местам успешно сформирован моделью " + model;
+        }
+        else
+        {
+            LatestBottleneckReport = AIInspectorEngine.GenerateBottleneckReport(snap);
+            LastApiNotice = "⚠️ (Локальный эксперт): Узкое место цеха — «" + LatestBottleneckReport.bottleneckStation + "»";
+        }
+
+        IsBottleneckAnalyzing = false;
+    }
+
+    /// <summary>
+    /// Запуск формирования графика превентивного техобслуживания узлов.
+    /// </summary>
+    public void RunMaintenancePlanAnalysis()
+    {
+        if (IsMaintenanceAnalyzing) return;
+        StartCoroutine(ExecuteMaintenanceRoutine());
+    }
+
+    private IEnumerator ExecuteMaintenanceRoutine()
+    {
+        IsMaintenanceAnalyzing = true;
+        LastApiNotice = "🛠️ Формирование графика превентивного техобслуживания узлов...";
+
+        var snap = FactoryTelemetryCollector.CollectSnapshot();
+        bool useSimulation = forceSimulationMode || OpenAIClient.IsPlaceholderKey(apiKey);
+
+        if (useSimulation)
+        {
+            yield return new WaitForSeconds(0.4f);
+            LatestMaintenanceReport = AIInspectorEngine.GenerateMaintenancePlanReport(snap);
+            LastApiNotice = $"✅ График ТО узлов обновлен ({LatestMaintenanceReport.criticalCount} срочных)";
+            IsMaintenanceAnalyzing = false;
+            yield break;
+        }
+
+        string promptText = FactoryTelemetryCollector.BuildTelemetryPromptText(snap,
+            "СФОКУСИРУЙТЕСЬ НА ПРЕВЕНТИВНОМ ТЕХОБСЛУЖИВАНИИ УЗЛОВ (PREDICTIVE MAINTENANCE). Сформируйте график превентивного ТО, распределите регламентные работы между службами СГМ, РТК и ЭТЛ, укажите требуемый ЗИП, смазки и технологическое окно для обслуживания без остановки потока.");
+        string systemPrompt = AIInspectorEngine.SystemRolePrompt;
+
+        string responseContent = null;
+        string errorMessage = null;
+
+        yield return OpenAIClient.SendChatRequest(
+            apiKey,
+            model,
+            systemPrompt,
+            promptText,
+            requestTimeoutSeconds,
+            onSuccess: (text) => responseContent = text,
+            onError: (err) => errorMessage = err
+        );
+
+        if (!string.IsNullOrEmpty(responseContent))
+        {
+            LatestMaintenanceReport = AIInspectorEngine.GenerateMaintenancePlanReport(snap, responseContent, model);
+            LastApiNotice = "✅ План ТО узлов успешно сформирован моделью " + model;
+        }
+        else
+        {
+            LatestMaintenanceReport = AIInspectorEngine.GenerateMaintenancePlanReport(snap);
+            LastApiNotice = $"⚠️ (Локальный эксперт): План ТО обновлен ({LatestMaintenanceReport.criticalCount} срочных)";
+        }
+
+        IsMaintenanceAnalyzing = false;
+    }
+
+    /// <summary>
+    /// Отправка вопроса в интерактивный диалог с ИИ-Инспектором (без редиректа на первую страницу).
+    /// </summary>
+    public void AskChatQuestion(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question)) return;
+        if (IsChatResponding) return;
+
+        string q = question.Trim();
+        customQuestionInput = "";
+
+        // Добавляем вопрос пользователя в диалог
+        ChatHistory.Add(new ChatMessage
+        {
+            sender = ChatMessage.SenderType.Operator,
+            text = q,
+            timestamp = DateTime.Now,
+            isPending = false
+        });
+
+        // Создаем временное сообщение ожидания ответа
+        var pendingMsg = new ChatMessage
+        {
+            sender = ChatMessage.SenderType.AI,
+            text = "⏳ Анализирую телеметрию завода и формулирую ответ...",
+            timestamp = DateTime.Now,
+            isPending = true
+        };
+        ChatHistory.Add(pendingMsg);
+
+        // Прокрутка вниз
+        chatScroll.y = 99999f;
+
+        StartCoroutine(ExecuteChatRoutine(q, pendingMsg));
+    }
+
+    private IEnumerator ExecuteChatRoutine(string question, ChatMessage pendingMsg)
+    {
+        IsChatResponding = true;
+        var snap = FactoryTelemetryCollector.CollectSnapshot();
+
+        bool useSimulation = forceSimulationMode || OpenAIClient.IsPlaceholderKey(apiKey);
+
+        if (useSimulation)
+        {
+            yield return new WaitForSeconds(0.4f);
+            pendingMsg.text = AIInspectorEngine.GenerateDirectChatAnswer(question, snap);
+            pendingMsg.isPending = false;
+            IsChatResponding = false;
+            chatScroll.y = 99999f;
+            yield break;
+        }
+
+        string systemPrompt = AIInspectorEngine.SystemRolePrompt +
+            "\nВы ведете прямой профессиональный диалог с оператором/начальником цеха автозавода Allur. Ответьте емко, конкретно и структурированно на его вопрос, опираясь на текущую телеметрию завода.";
+
+        string userPrompt = $"=== ТЕКУЩИЙ СТАТУС ЗАВОДА ===\n" +
+            $"Выпуск: {snap.totalFact}/{snap.totalPlan} авто. OEE: {Mathf.RoundToInt(snap.averageOee * 100f)}%. " +
+            $"Простои: {snap.totalDowntimeMin} мин. Узкое место: {snap.bottleneckProcess}. Брак: {snap.totalDefects}.\n\n" +
+            $"ВОПРОС ОПЕРАТОРА: {question}";
+
+        string responseContent = null;
+        string errorMessage = null;
+
+        yield return OpenAIClient.SendChatRequest(
+            apiKey,
+            model,
+            systemPrompt,
+            userPrompt,
+            requestTimeoutSeconds,
+            onSuccess: (text) => responseContent = text,
+            onError: (err) => errorMessage = err
+        );
+
+        if (!string.IsNullOrEmpty(responseContent))
+        {
+            pendingMsg.text = responseContent;
+            pendingMsg.isPending = false;
+        }
+        else
+        {
+            string fallback = AIInspectorEngine.GenerateDirectChatAnswer(question, snap);
+            pendingMsg.text = fallback;
+            pendingMsg.isPending = false;
+            if (!string.IsNullOrEmpty(errorMessage))
+            {
+                LastApiNotice = "⚠️ OpenAI API: " + errorMessage;
+            }
+        }
+
+        IsChatResponding = false;
+        chatScroll.y = 99999f;
+    }
+
+    private float GetTextHeight(string text, GUIStyle style, float width)
+    {
+        if (string.IsNullOrEmpty(text)) return 20f;
+        return Mathf.Max(20f, style.CalcHeight(new GUIContent(text), width));
     }
 
     private GUIStyle titleStyle, sectionHeaderStyle, subTitleStyle, bodyStyle, boldBodyStyle;
@@ -452,8 +706,8 @@ public class AllurAIInspector : MonoBehaviour
         curY += 24;
 
         // --- НАВИГАЦИОННЫЕ ВКЛАДКИ ---
-        float tabW = cw / 4f;
-        string[] tabs = { "📊 Сводка цеха", "⚠️ Узлы и Алерты", "🛠️ Все рекомендации", "💬 Чат и Настройки" };
+        float tabW = cw / 5f;
+        string[] tabs = { "📊 Сводка цеха", "🔍 Узкие места", "🛠️ План ТО узлов", "💬 Чат с ИИ", "⚙️ Настройки" };
         for (int i = 0; i < tabs.Length; i++)
         {
             Rect tr = new Rect(r.x + p + i * tabW, curY, tabW - 4, 30);
@@ -484,9 +738,10 @@ public class AllurAIInspector : MonoBehaviour
         switch (activeTab)
         {
             case 0: DrawDashboardTab(contentRect); break;
-            case 1: DrawEquipmentAlertsTab(contentRect); break;
-            case 2: DrawRecommendationsTab(contentRect); break;
-            case 3: DrawChatAndSettingsTab(contentRect); break;
+            case 1: DrawBottleneckTab(contentRect); break;
+            case 2: DrawMaintenanceTab(contentRect); break;
+            case 3: DrawChatTab(contentRect); break;
+            case 4: DrawSettingsTab(contentRect); break;
         }
 
         // --- ПОДВАЛ ОКНА: КНОПКИ ДЕЙСТВИЯ ---
@@ -496,17 +751,20 @@ public class AllurAIInspector : MonoBehaviour
         float btnW = (cw - 16) / 3f;
         if (GUI.Button(new Rect(r.x + p, footerY, btnW, 34), IsAnalyzing ? "Анализирую..." : "⚡ Комплексный аудит (GPT)", primaryButtonStyle))
         {
+            activeTab = 0;
             RunFactoryAudit(null);
         }
 
-        if (GUI.Button(new Rect(r.x + p + btnW + 8, footerY, btnW, 34), "🔍 Анализ узких мест", buttonStyle))
+        if (GUI.Button(new Rect(r.x + p + btnW + 8, footerY, btnW, 34), IsBottleneckAnalyzing ? "Анализирую..." : "🔍 Анализ узких мест", buttonStyle))
         {
-            RunFactoryAudit("Определи главное узкое место завода и риски задержки сменного такта.");
+            activeTab = 1;
+            RunBottleneckAnalysis();
         }
 
-        if (GUI.Button(new Rect(r.x + p + (btnW + 8) * 2, footerY, btnW, 34), "🛠️ План ТО узлов", buttonStyle))
+        if (GUI.Button(new Rect(r.x + p + (btnW + 8) * 2, footerY, btnW, 34), IsMaintenanceAnalyzing ? "Формирую план..." : "🛠️ План ТО узлов", buttonStyle))
         {
-            RunFactoryAudit("Сформируй график превентивного техобслуживания наиболее изношенных узлов.");
+            activeTab = 2;
+            RunMaintenancePlanAnalysis();
         }
     }
 
@@ -598,9 +856,10 @@ public class AllurAIInspector : MonoBehaviour
                 DrawBox(alertRow, alertBg, alertBorder);
                 GUI.Label(new Rect(10, y + 8, alertRow.width - 90, 20), f, bodyStyle);
 
-                if (GUI.Button(new Rect(alertRow.width - 76, y + 5, 70, 24), "Узлы →", buttonStyle))
+                string btnLbl = f.Contains("узк") || f.Contains("Bottleneck") ? "Узкие →" : "ТО →";
+                if (GUI.Button(new Rect(alertRow.width - 76, y + 5, 70, 24), btnLbl, buttonStyle))
                 {
-                    activeTab = 1; // Переход во вкладку узлов
+                    activeTab = f.Contains("узк") || f.Contains("Bottleneck") ? 1 : 2;
                 }
 
                 y += 38;
@@ -640,9 +899,9 @@ public class AllurAIInspector : MonoBehaviour
 
             if (LatestReport.recommendations.Count > 3)
             {
-                if (GUI.Button(new Rect(0, y, r.width - 24, 26), $"Показать все {LatestReport.recommendations.Count} рекомендаций подробнее →", buttonStyle))
+                if (GUI.Button(new Rect(0, y, r.width - 24, 26), "Перейти к полному графику превентивного ТО и предписаниям →", buttonStyle))
                 {
-                    activeTab = 2; // Переход во вкладку всех рекомендаций
+                    activeTab = 2; // Переход во вкладку плана ТО
                 }
                 y += 32;
             }
@@ -654,175 +913,375 @@ public class AllurAIInspector : MonoBehaviour
         GUI.Label(new Rect(0, y, r.width - 24, 18), "📋 АНАЛИТИЧЕСКАЯ ЗАПИСКА НЕЙРОСЕТИ", sectionHeaderStyle);
         y += 22;
 
-        Rect memoBox = new Rect(0, y, r.width - 24, 320);
+        float memoH = GetTextHeight(LatestReport.mainAnalysis, bodyStyle, r.width - 48);
+        Rect memoBox = new Rect(0, y, r.width - 24, memoH + 20f);
         DrawBox(memoBox, new Color(0.05f, 0.07f, 0.1f), new Color(1f, 1f, 1f, 0.08f));
-        GUI.Label(new Rect(12, y + 8, memoBox.width - 24, 304), LatestReport.mainAnalysis, bodyStyle);
-        y += 330;
+        GUI.Label(new Rect(12, y + 8, memoBox.width - 24, memoH), LatestReport.mainAnalysis, bodyStyle);
+        y += memoH + 30f;
 
         GUI.EndScrollView();
     }
 
     /// <summary>
-    /// Вкладка 1: Подробный мониторинг каждого поста и узла цеха (температуры, здоровье, ТО).
+    /// Вкладка 1: Детальный отчет по узким местам (Bottleneck Analysis) и балансировке такта цеха.
     /// </summary>
-    private void DrawEquipmentAlertsTab(Rect r)
+    private void DrawBottleneckTab(Rect r)
     {
-        var snap = FactoryTelemetryCollector.CollectSnapshot();
-        unitsScroll = GUI.BeginScrollView(r, unitsScroll, new Rect(0, 0, r.width - 18, Mathf.Max(snap.processes.Count * 230f, r.height)));
-
-        float y = 0;
-        foreach (var p in snap.processes)
+        if (LatestBottleneckReport == null)
         {
-            // Плашка процесса
-            Rect pCard = new Rect(0, y, r.width - 24, 28);
-            Color pHeaderBg = p.oee < 0.75f ? new Color(0.94f, 0.28f, 0.28f, 0.25f)
-                            : p.oee < 0.85f ? new Color(0.96f, 0.72f, 0.15f, 0.2f)
-                            : new Color(0.18f, 0.8f, 0.45f, 0.15f);
-
-            DrawBox(pCard, pHeaderBg, Color.clear);
-            GUI.Label(new Rect(10, y + 5, r.width - 40, 20),
-                $"🏭 {p.title} ({p.code})  ·  OEE: {Mathf.RoundToInt(p.oee * 100f)}%  ·  Выпуск: {p.fact}/{p.plan}  ·  Простой: {p.downtimeMin} мин", boldBodyStyle);
-            y += 32;
-
-            foreach (var u in p.units)
-            {
-                Rect uCard = new Rect(0, y, r.width - 24, 36);
-                Color hc = u.health >= 0.80f ? new Color(0.18f, 0.8f, 0.45f)
-                         : u.health >= 0.65f ? new Color(0.96f, 0.72f, 0.15f)
-                         : new Color(0.94f, 0.28f, 0.28f);
-
-                DrawBox(uCard, new Color(1f, 1f, 1f, 0.03f), new Color(1f, 1f, 1f, 0.06f));
-
-                // Имя узла
-                GUI.Label(new Rect(12, y + 8, 180, 20), u.name, boldBodyStyle);
-
-                // Температура с цветовым бейджем
-                Color tempColor = u.temp > 58f ? new Color(0.94f, 0.28f, 0.28f)
-                                : u.temp > 48f ? new Color(0.96f, 0.72f, 0.15f)
-                                : new Color(0.18f, 0.8f, 0.45f);
-                GUI.Label(new Rect(195, y + 8, 110, 20), $"t = <color=#{ColorUtility.ToHtmlStringRGB(tempColor)}>{u.temp:F1}°C</color>", bodyStyle);
-
-                // Наработка и часы до ТО
-                GUI.Label(new Rect(305, y + 8, 180, 20), $"Наработка: {u.hours}ч  ·  ТО: {u.hoursToService}ч", subTitleStyle);
-
-                // Прогресс-бар здоровья узла
-                Rect bar = new Rect(r.width - 150, y + 14, 110, 10);
-                DrawProgressBar(bar, u.health, hc, new Color(1f, 1f, 1f, 0.12f));
-
-                GUI.Label(new Rect(r.width - 150, y + 1, 110, 12), $"Здоровье {Mathf.RoundToInt(u.health * 100f)}%", kpiLabelStyle);
-
-                y += 40;
-            }
-            y += 10;
+            var snap = FactoryTelemetryCollector.CollectSnapshot();
+            LatestBottleneckReport = AIInspectorEngine.GenerateBottleneckReport(snap);
         }
 
-        GUI.EndScrollView();
-    }
+        var report = LatestBottleneckReport;
+        float memoH = GetTextHeight(report.rawAiAnalysis, bodyStyle, r.width - 48);
+        float totalH = 460f + report.rootCauses.Count * 44f + report.actionSteps.Count * 44f + memoH;
 
-    /// <summary>
-    /// Вкладка 2: Полный развернутый список всех инженерных предписаний и рекомендаций.
-    /// </summary>
-    private void DrawRecommendationsTab(Rect r)
-    {
-        if (LatestReport == null || LatestReport.recommendations == null || LatestReport.recommendations.Count == 0)
+        bottleneckScroll = GUI.BeginScrollView(r, bottleneckScroll, new Rect(0, 0, r.width - 18, totalH));
+        float y = 2;
+
+        // Заголовок вкладки и кнопка обновления
+        GUI.Label(new Rect(0, y, r.width - 200, 22), "🔍 ДЕТАЛЬНЫЙ АНАЛИЗ УЗКИХ МЕСТ И ТАКТА (BOTTLENECK)", titleStyle);
+        if (GUI.Button(new Rect(r.width - 190, y, 166, 26), IsBottleneckAnalyzing ? "Анализирую..." : "🔄 Обновить анализ", primaryButtonStyle))
         {
-            GUI.Label(r, "Рекомендации формируются в процессе аудита.", bodyStyle);
-            return;
+            RunBottleneckAnalysis();
         }
-
-        unitsScroll = GUI.BeginScrollView(r, unitsScroll, new Rect(0, 0, r.width - 18, LatestReport.recommendations.Count * 65f + 40f));
-        float y = 0;
-
-        GUI.Label(new Rect(0, y, r.width - 24, 20), "🛠️ ПОЛНЫЙ ПЕРЕЧЕНЬ ИНЖЕНЕРНЫХ ПРЕДПИСАНИЙ ДЛЯ СЛУЖБ ЦЕХА:", titleStyle);
         y += 28;
 
-        for (int i = 0; i < LatestReport.recommendations.Count; i++)
+        GUI.Label(new Rect(0, y, r.width - 24, 18), $"Анализ сформирован: {report.timestamp:HH:mm:ss}  ·  Источник: {report.sourceName}", subTitleStyle);
+        y += 22;
+
+        if (IsBottleneckAnalyzing)
         {
-            string rec = LatestReport.recommendations[i];
-            Rect card = new Rect(0, y, r.width - 24, 54);
-            DrawBox(card, new Color(0.08f, 0.13f, 0.22f), new Color(0.2f, 0.4f, 0.7f, 0.35f));
-
-            // Номерной бейдж
-            Rect numPill = new Rect(10, y + 12, 28, 28);
-            DrawBox(numPill, new Color(0.2f, 0.5f, 0.9f, 0.25f), new Color(0.2f, 0.5f, 0.9f, 0.5f));
-            GUI.Label(numPill, $"{i + 1}", badgeStyle);
-
-            // Определение службы по тексту
-            string tag = rec.Contains("механик") || rec.Contains("смазк") || rec.Contains("СГМ") ? "[СГМ]"
-                       : rec.Contains("робот") || rec.Contains("разгон") || rec.Contains("KUKA") ? "[РТК]"
-                       : rec.Contains("брак") || rec.Contains("герметик") || rec.Contains("стекл") ? "[ОТК]"
-                       : rec.Contains("логист") || rec.Contains("поток") || rec.Contains("буфер") ? "[ЛОГИСТИКА]"
-                       : "[ТЕХНОЛОГИ]";
-
-            Color tagColor = tag == "[СГМ]" ? new Color(0.2f, 0.6f, 1f)
-                           : tag == "[РТК]" ? new Color(0.7f, 0.4f, 1f)
-                           : tag == "[ОТК]" ? new Color(0.2f, 0.8f, 0.5f)
-                           : new Color(1f, 0.6f, 0.2f);
-
-            GUI.Label(new Rect(48, y + 6, 120, 18), $"<color=#{ColorUtility.ToHtmlStringRGB(tagColor)}>{tag}</color>", boldBodyStyle);
-            GUI.Label(new Rect(48, y + 22, card.width - 60, 30), rec, bodyStyle);
-
-            y += 58;
+            Rect loadingBox = new Rect(0, y, r.width - 24, 28);
+            DrawBox(loadingBox, new Color(0.96f, 0.72f, 0.15f, 0.15f), new Color(0.96f, 0.72f, 0.15f, 0.5f));
+            GUI.Label(new Rect(loadingBox.x + 8, loadingBox.y + 4, loadingBox.width - 16, 20), "⏳ Нейросеть Allur рассчитывает такт и выявляет скрытые заторы линии...", subTitleStyle);
+            y += 34;
         }
+
+        // Hero Card: Главное узкое место
+        Rect heroCard = new Rect(0, y, r.width - 24, 68);
+        DrawBox(heroCard, new Color(0.20f, 0.08f, 0.08f, 0.95f), new Color(0.94f, 0.35f, 0.35f, 0.8f), 2f);
+        GUI.Label(new Rect(heroCard.x + 12, heroCard.y + 8, heroCard.width - 24, 22), 
+            $"🚨 ГЛАВНОЕ УЗКОЕ МЕСТО: «{report.bottleneckStation.ToUpper()}» ({report.bottleneckCode})", boldBodyStyle);
+        GUI.Label(new Rect(heroCard.x + 12, heroCard.y + 34, heroCard.width - 24, 24), 
+            $"OEE: <color=#F87171>{Mathf.RoundToInt(report.stationOee * 100f)}%</color>  ·  Простой за смену: <color=#FBBF24>{report.downtimeMin} мин</color>  ·  Выпуск: {report.fact} из {report.plan} авто", bodyStyle);
+        y += 76;
+
+        // 3 Плитки влияния на поток
+        float tileW = (r.width - 36) / 3f;
+        float tileH = 62f;
+
+        Rect t1 = new Rect(0, y, tileW, tileH);
+        DrawBox(t1, new Color(0.08f, 0.12f, 0.18f), new Color(0.2f, 0.35f, 0.5f, 0.4f));
+        GUI.Label(new Rect(t1.x, t1.y + 6, tileW, 14), "ТАКТ СТАНЦИИ", kpiLabelStyle);
+        GUI.Label(new Rect(t1.x, t1.y + 20, tileW, 22), $"{report.cycleTimeSec:F0} сек <color=#F87171>(+{report.taktLagSec:F0}с)</color>", kpiValStyle);
+        GUI.Label(new Rect(t1.x, t1.y + 42, tileW, 14), $"Целевой такт: {report.taktTargetSec:F0} сек", kpiLabelStyle);
+
+        Rect t2 = new Rect(tileW + 6, y, tileW, tileH);
+        DrawBox(t2, new Color(0.08f, 0.12f, 0.18f), new Color(0.2f, 0.35f, 0.5f, 0.4f));
+        GUI.Label(new Rect(t2.x, t2.y + 6, tileW, 14), "ПОТЕРИ ВЫПУСКА", kpiLabelStyle);
+        GUI.Label(new Rect(t2.x, t2.y + 20, tileW, 22), $"~{report.lostCarsEstimate} авто", kpiValStyle);
+        GUI.Label(new Rect(t2.x, t2.y + 42, tileW, 14), "Из-за задержек смены", kpiLabelStyle);
+
+        Rect t3 = new Rect((tileW + 6) * 2, y, tileW, tileH);
+        DrawBox(t3, new Color(0.08f, 0.12f, 0.18f), new Color(0.2f, 0.35f, 0.5f, 0.4f));
+        GUI.Label(new Rect(t3.x, t3.y + 6, tileW, 14), "МЕЖОПЕРАЦИОННЫЕ БУФЕРЫ", kpiLabelStyle);
+        GUI.Label(new Rect(t3.x, t3.y + 20, tileW, 22), "<color=#F87171>3/3</color> ➔ <color=#FBBF24>0/3</color>", kpiValStyle);
+        GUI.Label(new Rect(t3.x, t3.y + 42, tileW, 14), "Переполнение / Голодание", kpiLabelStyle);
+        y += tileH + 14;
+
+        // Буферные статусы
+        Rect bufBox = new Rect(0, y, r.width - 24, 38);
+        DrawBox(bufBox, new Color(1f, 1f, 1f, 0.03f), new Color(1f, 1f, 1f, 0.08f));
+        GUI.Label(new Rect(8, y + 2, bufBox.width - 16, 16), report.bufferUpstream, subTitleStyle);
+        GUI.Label(new Rect(8, y + 18, bufBox.width - 16, 16), report.bufferDownstream, subTitleStyle);
+        y += 48;
+
+        // Первопричины
+        GUI.Label(new Rect(0, y, r.width - 24, 18), "⚠️ ВЫЯВЛЕННЫЕ ПЕРВОПРИЧИНЫ ЗАТОРА (ROOT CAUSES):", sectionHeaderStyle);
+        y += 24;
+
+        foreach (var cause in report.rootCauses)
+        {
+            Rect causeBox = new Rect(0, y, r.width - 24, 36);
+            DrawBox(causeBox, new Color(0.12f, 0.08f, 0.08f, 0.5f), new Color(0.94f, 0.35f, 0.35f, 0.3f));
+            GUI.Label(new Rect(10, y + 8, causeBox.width - 20, 20), cause, bodyStyle);
+            y += 42;
+        }
+        y += 8;
+
+        // План действий
+        GUI.Label(new Rect(0, y, r.width - 24, 18), "🛠️ ПОШАГОВЫЙ ПЛАН ИИ ПО ЛИКВИДАЦИИ УЗКОГО МЕСТА:", sectionHeaderStyle);
+        y += 24;
+
+        foreach (var step in report.actionSteps)
+        {
+            Rect stepBox = new Rect(0, y, r.width - 24, 36);
+            DrawBox(stepBox, new Color(0.06f, 0.14f, 0.22f), new Color(0.2f, 0.45f, 0.75f, 0.4f));
+            GUI.Label(new Rect(10, y + 8, stepBox.width - 20, 20), step, bodyStyle);
+            y += 42;
+        }
+        y += 8;
+
+        // Аналитическая записка
+        GUI.Label(new Rect(0, y, r.width - 24, 18), "📋 ПОЛНЫЙ ТЕКСТ АНАЛИТИЧЕСКОЙ ЗАПИСКИ НЕЙРОСЕТИ:", sectionHeaderStyle);
+        y += 24;
+
+        Rect rawBox = new Rect(0, y, r.width - 24, memoH + 20f);
+        DrawBox(rawBox, new Color(0.05f, 0.07f, 0.1f), new Color(1f, 1f, 1f, 0.08f));
+        GUI.Label(new Rect(12, y + 10, rawBox.width - 24, memoH), report.rawAiAnalysis, bodyStyle);
+        y += memoH + 26f;
 
         GUI.EndScrollView();
     }
 
     /// <summary>
-    /// Вкладка 3: Интерактивный диалог с ИИ и настройки параметров OpenAI.
+    /// Вкладка 2: График и детальный план превентивного ТО узлов оборудования цеха.
     /// </summary>
-    private void DrawChatAndSettingsTab(Rect r)
+    private void DrawMaintenanceTab(Rect r)
     {
-        unitsScroll = GUI.BeginScrollView(r, unitsScroll, new Rect(0, 0, r.width - 18, 560));
-        float y = 0;
+        if (LatestMaintenanceReport == null)
+        {
+            var snap = FactoryTelemetryCollector.CollectSnapshot();
+            LatestMaintenanceReport = AIInspectorEngine.GenerateMaintenancePlanReport(snap);
+        }
 
-        // БЛОК 1: ДИАЛОГ С ИИ
-        GUI.Label(new Rect(0, y, r.width - 24, 20), "💬 ВОПРОС ЦИФРОВОМУ ИНСПЕКТОРУ:", titleStyle);
+        var report = LatestMaintenanceReport;
+        float memoH = GetTextHeight(report.rawAiAnalysis, bodyStyle, r.width - 48);
+        float totalH = 260f + report.tasks.Count * 78f + report.sparePartsSummary.Count * 30f + memoH;
+
+        maintenanceScroll = GUI.BeginScrollView(r, maintenanceScroll, new Rect(0, 0, r.width - 18, totalH));
+        float y = 2;
+
+        // Заголовок вкладки и кнопка обновления
+        GUI.Label(new Rect(0, y, r.width - 210, 22), "🛠️ ГРАФИК ПРЕВЕНТИВНОГО ТЕХОБСЛУЖИВАНИЯ (ПЛАН ТО)", titleStyle);
+        if (GUI.Button(new Rect(r.width - 200, y, 176, 26), IsMaintenanceAnalyzing ? "Формирую..." : "🔄 Обновить график ТО", primaryButtonStyle))
+        {
+            RunMaintenancePlanAnalysis();
+        }
+        y += 28;
+
+        GUI.Label(new Rect(0, y, r.width - 24, 18), $"График сформирован: {report.timestamp:HH:mm:ss}  ·  {report.sourceName}", subTitleStyle);
+        y += 22;
+
+        if (IsMaintenanceAnalyzing)
+        {
+            Rect loadingBox = new Rect(0, y, r.width - 24, 28);
+            DrawBox(loadingBox, new Color(0.18f, 0.74f, 0.97f, 0.15f), new Color(0.18f, 0.74f, 0.97f, 0.5f));
+            GUI.Label(new Rect(loadingBox.x + 8, loadingBox.y + 4, loadingBox.width - 16, 20), "⏳ Нейросеть производит расчет наработки узлов и формирует предписания ТО...", subTitleStyle);
+            y += 34;
+        }
+
+        // 3 Бейджа срочности
+        float pillW = (r.width - 36) / 3f;
+        Rect p1 = new Rect(0, y, pillW, 36);
+        DrawBox(p1, new Color(0.94f, 0.28f, 0.28f, 0.15f), new Color(0.94f, 0.28f, 0.28f, 0.6f));
+        GUI.Label(p1, $"🔴 СРОЧНО (<24ч): {report.criticalCount} узлов", badgeStyle);
+
+        Rect p2 = new Rect(pillW + 6, y, pillW, 36);
+        DrawBox(p2, new Color(0.96f, 0.72f, 0.15f, 0.15f), new Color(0.96f, 0.72f, 0.15f, 0.6f));
+        GUI.Label(p2, $"🟡 ВНИМАНИЕ (<72ч): {report.warningCount} узлов", badgeStyle);
+
+        Rect p3 = new Rect((pillW + 6) * 2, y, pillW, 36);
+        DrawBox(p3, new Color(0.18f, 0.8f, 0.45f, 0.15f), new Color(0.18f, 0.8f, 0.45f, 0.6f));
+        GUI.Label(p3, $"🟢 ПЛАНОВО (>72ч): {report.scheduledCount} узлов", badgeStyle);
+        y += 46;
+
+        // Список задач оборудования
+        GUI.Label(new Rect(0, y, r.width - 24, 18), "📋 ПЕРЕЧЕНЬ УЗЛОВ И РАСПРЕДЕЛЕНИЕ РАБОТ ПО СЛУЖБАМ [СГМ / РТК / ЭТЛ]:", sectionHeaderStyle);
         y += 24;
 
-        Rect inputRect = new Rect(0, y, r.width - 130, 32);
+        foreach (var task in report.tasks)
+        {
+            Rect card = new Rect(0, y, r.width - 24, 72);
+            DrawBox(card, new Color(0.07f, 0.10f, 0.16f), task.urgencyColor * 0.45f);
+
+            // Бейдж срочности
+            Rect urgBadge = new Rect(card.x + 8, card.y + 6, 120, 18);
+            DrawBox(urgBadge, task.urgencyColor * 0.2f, task.urgencyColor);
+            GUI.Label(urgBadge, task.urgencyText, badgeStyle);
+
+            // Название поста и узла
+            GUI.Label(new Rect(card.x + 136, card.y + 6, 260, 18), $"🏭 {task.stationName} — {task.unitName}", boldBodyStyle);
+
+            // Температура и наработка
+            Color tc = task.temperature > 55f ? new Color(0.94f, 0.28f, 0.28f) : task.temperature > 48f ? new Color(0.96f, 0.72f, 0.15f) : new Color(0.18f, 0.8f, 0.45f);
+            GUI.Label(new Rect(card.x + 405, card.y + 6, 175, 18), $"t = <color=#{ColorUtility.ToHtmlStringRGB(tc)}>{task.temperature:F1}°C</color>  ·  ТО: {task.hoursToService}ч", bodyStyle);
+
+            // Прогресс-бар здоровья
+            Rect bar = new Rect(card.width - 130, card.y + 10, 110, 10);
+            Color hc = task.health < 0.65f ? Color.red : task.health < 0.80f ? Color.yellow : Color.green;
+            DrawProgressBar(bar, task.health, hc, new Color(1f, 1f, 1f, 0.1f));
+
+            // Детализация работ
+            GUI.Label(new Rect(card.x + 8, card.y + 28, card.width - 16, 18), 
+                $"<color=#38BDF8>{task.department}</color>  ·  🔧 Регламент: {task.procedure}", bodyStyle);
+            GUI.Label(new Rect(card.x + 8, card.y + 48, card.width - 16, 18), 
+                $"📦 ЗИП / материалы: {task.partsAndConsumables}", subTitleStyle);
+
+            y += 78;
+        }
+        y += 8;
+
+        // Потребность в ЗИП
+        GUI.Label(new Rect(0, y, r.width - 24, 18), "📦 СВОДНАЯ ПОТРЕБНОСТЬ В РАСХОДНЫХ МАТЕРИАЛАХ И ЗИП:", sectionHeaderStyle);
+        y += 24;
+
+        foreach (var item in report.sparePartsSummary)
+        {
+            Rect spBox = new Rect(0, y, r.width - 24, 26);
+            DrawBox(spBox, new Color(1f, 1f, 1f, 0.03f), Color.clear);
+            GUI.Label(new Rect(8, y + 4, spBox.width - 16, 18), item, bodyStyle);
+            y += 30;
+        }
+        y += 8;
+
+        // Регламент проведения работ
+        GUI.Label(new Rect(0, y, r.width - 24, 18), "🛡️ РЕГЛАМЕНТ БЕЗОПАСНОСТИ И ПОРЯДОК ПРИЕМКИ ОТК:", sectionHeaderStyle);
+        y += 24;
+
+        Rect gBox = new Rect(0, y, r.width - 24, memoH + 20f);
+        DrawBox(gBox, new Color(0.05f, 0.07f, 0.1f), new Color(1f, 1f, 1f, 0.08f));
+        GUI.Label(new Rect(12, y + 10, gBox.width - 24, memoH), report.rawAiAnalysis, bodyStyle);
+        y += memoH + 26f;
+
+        GUI.EndScrollView();
+    }
+
+    /// <summary>
+    /// Вкладка 3: Интерактивный диалог с ИИ-Инспектором без редиректов и с отображением истории Q&A.
+    /// </summary>
+    private void DrawChatTab(Rect r)
+    {
+        // 1. Верхняя панель управления чатом
+        GUI.Label(new Rect(0, 0, r.width - 140, 22), "💬 ОПЕРАТИВНЫЙ ДИАЛОГ С ИИ-ИНСПЕКТОРОМ ALLUR", titleStyle);
+        if (GUI.Button(new Rect(r.width - 130, 0, 106, 26), "🗑️ Очистить", buttonStyle))
+        {
+            ChatHistory.Clear();
+            ChatHistory.Add(new ChatMessage
+            {
+                sender = ChatMessage.SenderType.AI,
+                text = "Диалог очищен. Задайте любой технический вопрос по телеметрии автозавода Allur.",
+                timestamp = DateTime.Now,
+                isPending = false
+            });
+        }
+
+        GUI.Label(new Rect(0, 24, r.width - 24, 18), 
+            "Задавайте любые вопросы по участкам цеха, причинам простоев, такту или оборудованию.", subTitleStyle);
+
+        float chatAreaY = 46f;
+        float bottomBarH = 76f;
+        float chatAreaH = r.height - chatAreaY - bottomBarH;
+
+        // Расчет высоты диалога
+        float totalChatH = 20f;
+        for (int i = 0; i < ChatHistory.Count; i++)
+        {
+            float textH = GetTextHeight(ChatHistory[i].text, bodyStyle, r.width - 56);
+            totalChatH += textH + 42f;
+        }
+
+        // 2. Скролл истории сообщений
+        Rect chatViewRect = new Rect(0, chatAreaY, r.width, chatAreaH);
+        chatScroll = GUI.BeginScrollView(chatViewRect, chatScroll, new Rect(0, 0, r.width - 18, Mathf.Max(totalChatH, chatAreaH)));
+
+        float curY = 6f;
+        for (int i = 0; i < ChatHistory.Count; i++)
+        {
+            var msg = ChatHistory[i];
+            float textH = GetTextHeight(msg.text, bodyStyle, r.width - 56);
+            float bubbleH = textH + 34f;
+            Rect bubbleRect = new Rect(4, curY, r.width - 28, bubbleH);
+
+            if (msg.sender == ChatMessage.SenderType.Operator)
+            {
+                // Сообщение оператора
+                DrawBox(bubbleRect, new Color(0.10f, 0.18f, 0.28f, 0.95f), new Color(0.25f, 0.50f, 0.85f, 0.6f));
+                GUI.Label(new Rect(bubbleRect.x + 12, bubbleRect.y + 6, bubbleRect.width - 24, 16), 
+                    $"🧑‍💻 Оператор цеха  ·  {msg.timestamp:HH:mm:ss}", subTitleStyle);
+                GUI.Label(new Rect(bubbleRect.x + 12, bubbleRect.y + 24, bubbleRect.width - 24, textH + 4), 
+                    msg.text, boldBodyStyle);
+            }
+            else
+            {
+                // Сообщение ИИ
+                Color borderC = msg.isPending ? new Color(0.96f, 0.72f, 0.15f, 0.6f) : new Color(0.18f, 0.74f, 0.97f, 0.6f);
+                DrawBox(bubbleRect, new Color(0.05f, 0.11f, 0.16f, 0.95f), borderC);
+
+                string header = msg.isPending 
+                    ? $"⏳ Цифровой Инспектор (анализирую телеметрию...)  ·  {msg.timestamp:HH:mm:ss}"
+                    : $"🤖 Цифровой ИИ-Инспектор Allur  ·  {msg.timestamp:HH:mm:ss}";
+                GUI.Label(new Rect(bubbleRect.x + 12, bubbleRect.y + 6, bubbleRect.width - 24, 16), 
+                    header, msg.isPending ? subTitleStyle : sectionHeaderStyle);
+                GUI.Label(new Rect(bubbleRect.x + 12, bubbleRect.y + 24, bubbleRect.width - 24, textH + 4), 
+                    msg.text, bodyStyle);
+            }
+
+            curY += bubbleH + 10f;
+        }
+
+        GUI.EndScrollView();
+
+        // 3. Нижняя панель: Быстрые сценарии и поле ввода
+        float inputSectionY = r.height - bottomBarH + 2f;
+
+        // Быстрые чипы-сценарии
+        string[] quickChips = { "⚡ OEE цеха", "🔍 Узкое место", "🛠️ График ТО", "🌡️ Нагрев роботов", "📦 Срыв плана" };
+        float chipW = (r.width - 24 - 16) / quickChips.Length;
+        for (int i = 0; i < quickChips.Length; i++)
+        {
+            Rect cr = new Rect(i * (chipW + 4), inputSectionY, chipW, 24);
+            if (GUI.Button(cr, quickChips[i], tabStyle))
+            {
+                if (quickChips[i].Contains("OEE")) AskChatQuestion("Как повысить текущий OEE завода на 5%?");
+                else if (quickChips[i].Contains("Узкое")) AskChatQuestion("Определи главное узкое место завода и риски задержки сменного такта.");
+                else if (quickChips[i].Contains("ТО")) AskChatQuestion("Сформируй график превентивного техобслуживания наиболее изношенных узлов.");
+                else if (quickChips[i].Contains("Нагрев")) AskChatQuestion("Какие роботы и приводы имеют повышенную температуру?");
+                else AskChatQuestion("Оцени риск срыва сменного плана выпуска авто.");
+            }
+        }
+
+        // Поле ввода и кнопка
+        float fieldY = inputSectionY + 28f;
+        GUI.SetNextControlName("ChatInputField");
+        Rect inputRect = new Rect(0, fieldY, r.width - 120, 32);
         customQuestionInput = GUI.TextField(inputRect, customQuestionInput, inputStyle);
 
-        if (GUI.Button(new Rect(r.width - 120, y, 96, 32), "Спросить", primaryButtonStyle))
+        // Обработка клавиши Enter
+        if (Event.current.type == EventType.KeyDown && 
+            (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter) && 
+            GUI.GetNameOfFocusedControl() == "ChatInputField")
         {
             if (!string.IsNullOrWhiteSpace(customQuestionInput))
             {
-                RunFactoryAudit(customQuestionInput);
-                activeTab = 0;
+                AskChatQuestion(customQuestionInput);
+                Event.current.Use();
             }
         }
-        y += 40;
 
-        GUI.Label(new Rect(0, y, r.width - 24, 18), "Быстрые сценарии оператора:", subTitleStyle);
-        y += 20;
-
-        string[] quickQuestions =
+        if (GUI.Button(new Rect(r.width - 110, fieldY, 86, 32), IsChatResponding ? "..." : "Спросить", primaryButtonStyle))
         {
-            "Как повысить текущий OEE завода на 5%?",
-            "Какие манипуляторы имеют повышенную температуру?",
-            "Оцени риск срыва сменного плана на линии колес."
-        };
-
-        foreach (var q in quickQuestions)
-        {
-            if (GUI.Button(new Rect(0, y, r.width - 24, 26), "• " + q, tabStyle))
+            if (!string.IsNullOrWhiteSpace(customQuestionInput))
             {
-                customQuestionInput = q;
-                RunFactoryAudit(q);
-                activeTab = 0;
+                AskChatQuestion(customQuestionInput);
             }
-            y += 30;
         }
+    }
 
-        y += 16;
-        DrawLine(new Rect(0, y, r.width - 24, 1), new Color(1f, 1f, 1f, 0.08f));
-        y += 14;
+    /// <summary>
+    /// Вкладка 4: Настройки OpenAI API и параметров инспектора.
+    /// </summary>
+    private void DrawSettingsTab(Rect r)
+    {
+        settingsScroll = GUI.BeginScrollView(r, settingsScroll, new Rect(0, 0, r.width - 18, 460));
+        float y = 2;
 
-        // БЛОК 2: НАСТРОЙКИ API
         GUI.Label(new Rect(0, y, r.width - 24, 20), "🔧 НАСТРОЙКИ OPENAI API:", titleStyle);
-        y += 24;
+        y += 26;
 
-        GUI.Label(new Rect(0, y, 140, 22), "API Key:", bodyStyle);
+        GUI.Label(new Rect(0, y, 140, 24), "API Key:", bodyStyle);
         apiKeyInput = GUI.TextField(new Rect(140, y, r.width - 250, 26), apiKeyInput, inputStyle);
 
         if (GUI.Button(new Rect(r.width - 100, y, 76, 26), "Сохранить", buttonStyle))
@@ -832,7 +1291,7 @@ public class AllurAIInspector : MonoBehaviour
         }
         y += 36;
 
-        GUI.Label(new Rect(0, y, 140, 22), "Модель нейросети:", bodyStyle);
+        GUI.Label(new Rect(0, y, 140, 24), "Модель нейросети:", bodyStyle);
         string[] models = { "gpt-4o-mini", "gpt-4o" };
         for (int i = 0; i < models.Length; i++)
         {
@@ -845,9 +1304,26 @@ public class AllurAIInspector : MonoBehaviour
         y += 38;
 
         forceSimulationMode = GUI.Toggle(new Rect(0, y, r.width - 24, 22), forceSimulationMode, " Автономный режим симуляции (без запросов в сеть)");
+        y += 28;
+
+        autoAnalyze = GUI.Toggle(new Rect(0, y, r.width - 24, 22), autoAnalyze, $" Автоматический фоновый аудит (каждые {autoAnalyzeIntervalSeconds:F0} сек)");
+        y += 36;
+
+        DrawLine(new Rect(0, y, r.width - 24, 1), new Color(1f, 1f, 1f, 0.08f));
+        y += 16;
+
+        GUI.Label(new Rect(0, y, r.width - 24, 20), "ℹ️ ДИАГНОСТИКА ПОДКЛЮЧЕНИЯ:", titleStyle);
         y += 26;
 
-        autoAnalyze = GUI.Toggle(new Rect(0, y, r.width - 24, 22), autoAnalyze, $" Автоматический периодический аудит (каждые {autoAnalyzeIntervalSeconds:F0} сек)");
+        bool hasValidKey = !OpenAIClient.IsPlaceholderKey(apiKey);
+        string keyStatus = hasValidKey ? "<color=#34D399>Подключен (sk-...)</color>" : "<color=#F87171>Не установлен / Заглушка</color>";
+        GUI.Label(new Rect(0, y, r.width - 24, 20), $"Статус ключа: {keyStatus}", bodyStyle);
+        y += 22;
+
+        GUI.Label(new Rect(0, y, r.width - 24, 20), $"Активная модель: <color=#38BDF8>{model}</color> (Таймаут: {requestTimeoutSeconds}с)", bodyStyle);
+        y += 22;
+
+        GUI.Label(new Rect(0, y, r.width - 24, 20), $"Режим работы: {(forceSimulationMode ? "Автономный эксперт Allur" : "Онлайн нейросеть OpenAI с резервным симулятором")}", bodyStyle);
         y += 30;
 
         GUI.EndScrollView();
