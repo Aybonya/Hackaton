@@ -70,6 +70,12 @@ public class AllurAIInspector : MonoBehaviour
     private Rect windowRect;
     private bool stylesInitialized = false;
 
+    // Переменные свободного позиционирования и перетаскивания окна мышью
+    private Vector2 windowPos = Vector2.zero;
+    private bool hasCustomPos = false;
+    private bool isDraggingHeader = false;
+    private Vector2 dragMouseOffset = Vector2.zero;
+
     public string ApiKey
     {
         get => apiKey;
@@ -417,6 +423,7 @@ public class AllurAIInspector : MonoBehaviour
 
         string q = question.Trim();
         customQuestionInput = "";
+        activeTab = 3; // Переключаемся на вкладку диалога с ИИ
 
         // Добавляем вопрос пользователя в диалог
         ChatHistory.Add(new ChatMessage
@@ -621,22 +628,49 @@ public class AllurAIInspector : MonoBehaviour
 
     private void OnGUI()
     {
+        // Повышенный приоритет отрисовки IMGUI (окно всегда поверх боковых панелей и элементов сцены)
+        GUI.depth = -100;
         InitStyles();
 
-        // 1. Кнопка вызова инспектора в HUD
-        DrawHudTriggerButton();
-
-        // 2. Если окно открыто — рисуем главную панель
-        if (isWindowOpen)
+        // 1. Кнопка вызова инспектора в HUD (показываем только когда главное окно закрыто)
+        if (!isWindowOpen)
         {
-            float w = Mathf.Min(840f, Screen.width * 0.95f);
-            float h = Mathf.Min(710f, Screen.height * 0.94f);
-            float x = (Screen.width - w) * 0.5f;
-            float y = (Screen.height - h) * 0.5f;
-
-            windowRect = new Rect(x, y, w, h);
-            DrawInspectorWindow(windowRect);
+            DrawHudTriggerButton();
+            return;
         }
+
+        // 2. Если окно открыто — определяем доступную область экрана с учетом CellSidebar
+        float sidebarPx = 0f;
+        Camera mainCam = Camera.main;
+        if (mainCam != null && mainCam.rect.width < 0.98f)
+        {
+            sidebarPx = Screen.width * (1f - mainCam.rect.width);
+        }
+
+        // Если открыта панель ячейки и остается комфортное место, центрируем инспектор в свободной левой части
+        float availW = (sidebarPx > 50f && (Screen.width - sidebarPx) >= 640f)
+            ? (Screen.width - sidebarPx)
+            : Screen.width;
+
+        float w = Mathf.Clamp(Mathf.Min(840f, availW - 24f), 580f, 860f);
+        float h = Mathf.Min(710f, Screen.height * 0.94f);
+
+        float defaultX = Mathf.Max(8f, (availW - w) * 0.5f);
+        float defaultY = Mathf.Max(8f, (Screen.height - h) * 0.5f);
+
+        if (!hasCustomPos)
+        {
+            windowPos = new Vector2(defaultX, defaultY);
+        }
+        else
+        {
+            // Ограничиваем окно границами экрана, чтобы не улетало за пределы
+            windowPos.x = Mathf.Clamp(windowPos.x, 4f, Mathf.Max(4f, Screen.width - w - 4f));
+            windowPos.y = Mathf.Clamp(windowPos.y, 4f, Mathf.Max(4f, Screen.height - h - 4f));
+        }
+
+        windowRect = new Rect(windowPos.x, windowPos.y, w, h);
+        DrawInspectorWindow(windowRect);
     }
 
     private void DrawHudTriggerButton()
@@ -666,6 +700,39 @@ public class AllurAIInspector : MonoBehaviour
 
     private void DrawInspectorWindow(Rect r)
     {
+        // Перетаскивание окна мышью за шапку (drag bar)
+        Rect dragBarRect = new Rect(r.x, r.y, r.width - 80f, 36f);
+        Event e = Event.current;
+        if (e != null)
+        {
+            if (e.type == EventType.MouseDown && dragBarRect.Contains(e.mousePosition) && e.button == 0)
+            {
+                if (e.clickCount == 2)
+                {
+                    // Двойной клик сбрасывает позицию в центр экрана
+                    hasCustomPos = false;
+                    e.Use();
+                }
+                else
+                {
+                    isDraggingHeader = true;
+                    dragMouseOffset = e.mousePosition - windowPos;
+                    e.Use();
+                }
+            }
+            else if (e.type == EventType.MouseDrag && isDraggingHeader)
+            {
+                windowPos = e.mousePosition - dragMouseOffset;
+                hasCustomPos = true;
+                e.Use();
+            }
+            else if (e.rawType == EventType.MouseUp && isDraggingHeader)
+            {
+                isDraggingHeader = false;
+                e.Use();
+            }
+        }
+
         // Подложка окна в стиле темного индустриального центра управления
         DrawBox(r, new Color(0.06f, 0.08f, 0.12f, 0.98f), new Color(0.2f, 0.35f, 0.55f, 0.6f), 2f);
 
@@ -677,12 +744,18 @@ public class AllurAIInspector : MonoBehaviour
         float curY = r.y + p;
 
         // --- ШАПКА ОКНА ---
-        GUI.Label(new Rect(r.x + p, curY, 380, 22), "🤖 ЦИФРОВОЙ ИИ-ИНСПЕКТОР ALLUR", titleStyle);
+        GUI.Label(new Rect(r.x + p, curY, Mathf.Max(200f, r.width - 270f), 22), "🤖 ЦИФРОВОЙ ИИ-ИНСПЕКТОР ALLUR", titleStyle);
 
         // Кнопка закрытия
-        if (GUI.Button(new Rect(r.x + r.width - 44, curY - 2, 28, 24), "✕", buttonStyle))
+        if (GUI.Button(new Rect(r.x + r.width - 40, curY - 2, 28, 24), "✕", buttonStyle))
         {
             isWindowOpen = false;
+        }
+
+        // Кнопка сброса позиции / центрирования
+        if (GUI.Button(new Rect(r.x + r.width - 72, curY - 2, 28, 24), "⤢", buttonStyle))
+        {
+            hasCustomPos = false;
         }
 
         // Правый бейдж здоровья завода
@@ -691,7 +764,7 @@ public class AllurAIInspector : MonoBehaviour
                          : score >= 75f ? new Color(0.96f, 0.72f, 0.15f)
                          : new Color(0.94f, 0.28f, 0.28f);
 
-        Rect scorePill = new Rect(r.x + r.width - 225, curY - 2, 172, 24);
+        Rect scorePill = new Rect(r.x + r.width - 245, curY - 2, 168, 24);
         DrawBox(scorePill, new Color(scoreColor.r, scoreColor.g, scoreColor.b, 0.16f), scoreColor);
         GUI.Label(scorePill, $"🛡️ Индекс цеха: {score:F1}%", badgeStyle);
 
@@ -707,7 +780,7 @@ public class AllurAIInspector : MonoBehaviour
 
         // --- НАВИГАЦИОННЫЕ ВКЛАДКИ ---
         float tabW = cw / 5f;
-        string[] tabs = { "📊 Сводка цеха", "🔍 Узкие места", "🛠️ План ТО узлов", "💬 Чат с ИИ", "⚙️ Настройки" };
+        string[] tabs = { "📊 Сводка", "🔍 Узкие места", "🛠️ План ТО", "💬 Чат с ИИ", "⚙️ Настройки" };
         for (int i = 0; i < tabs.Length; i++)
         {
             Rect tr = new Rect(r.x + p + i * tabW, curY, tabW - 4, 30);
@@ -1151,12 +1224,13 @@ public class AllurAIInspector : MonoBehaviour
 
     /// <summary>
     /// Вкладка 3: Интерактивный диалог с ИИ-Инспектором без редиректов и с отображением истории Q&A.
+    /// Все координаты строго привязаны к рабочей области вкладки (r.x, r.y).
     /// </summary>
     private void DrawChatTab(Rect r)
     {
         // 1. Верхняя панель управления чатом
-        GUI.Label(new Rect(0, 0, r.width - 140, 22), "💬 ОПЕРАТИВНЫЙ ДИАЛОГ С ИИ-ИНСПЕКТОРОМ ALLUR", titleStyle);
-        if (GUI.Button(new Rect(r.width - 130, 0, 106, 26), "🗑️ Очистить", buttonStyle))
+        GUI.Label(new Rect(r.x, r.y, r.width - 120, 22), "💬 ОПЕРАТИВНЫЙ ДИАЛОГ С ИИ-ИНСПЕКТОРОМ ALLUR", titleStyle);
+        if (GUI.Button(new Rect(r.x + r.width - 110, r.y, 110, 24), "🗑️ Очистить", buttonStyle))
         {
             ChatHistory.Clear();
             ChatHistory.Add(new ChatMessage
@@ -1168,12 +1242,12 @@ public class AllurAIInspector : MonoBehaviour
             });
         }
 
-        GUI.Label(new Rect(0, 24, r.width - 24, 18), 
+        GUI.Label(new Rect(r.x, r.y + 24, r.width - 24, 18), 
             "Задавайте любые вопросы по участкам цеха, причинам простоев, такту или оборудованию.", subTitleStyle);
 
-        float chatAreaY = 46f;
-        float bottomBarH = 76f;
-        float chatAreaH = r.height - chatAreaY - bottomBarH;
+        float headerH = 46f;
+        float bottomBarH = 74f;
+        float chatAreaH = Mathf.Max(100f, r.height - headerH - bottomBarH);
 
         // Расчет высоты диалога
         float totalChatH = 20f;
@@ -1184,16 +1258,18 @@ public class AllurAIInspector : MonoBehaviour
         }
 
         // 2. Скролл истории сообщений
-        Rect chatViewRect = new Rect(0, chatAreaY, r.width, chatAreaH);
+        Rect chatViewRect = new Rect(r.x, r.y + headerH, r.width, chatAreaH);
+        DrawBox(chatViewRect, new Color(0.04f, 0.06f, 0.09f, 0.75f), new Color(1f, 1f, 1f, 0.06f));
+
         chatScroll = GUI.BeginScrollView(chatViewRect, chatScroll, new Rect(0, 0, r.width - 18, Mathf.Max(totalChatH, chatAreaH)));
 
-        float curY = 6f;
+        float curY = 8f;
         for (int i = 0; i < ChatHistory.Count; i++)
         {
             var msg = ChatHistory[i];
             float textH = GetTextHeight(msg.text, bodyStyle, r.width - 56);
             float bubbleH = textH + 34f;
-            Rect bubbleRect = new Rect(4, curY, r.width - 28, bubbleH);
+            Rect bubbleRect = new Rect(6, curY, r.width - 30, bubbleH);
 
             if (msg.sender == ChatMessage.SenderType.Operator)
             {
@@ -1225,14 +1301,15 @@ public class AllurAIInspector : MonoBehaviour
         GUI.EndScrollView();
 
         // 3. Нижняя панель: Быстрые сценарии и поле ввода
-        float inputSectionY = r.height - bottomBarH + 2f;
+        float inputSectionY = r.y + r.height - bottomBarH + 4f;
 
         // Быстрые чипы-сценарии
-        string[] quickChips = { "⚡ OEE цеха", "🔍 Узкое место", "🛠️ График ТО", "🌡️ Нагрев роботов", "📦 Срыв плана" };
-        float chipW = (r.width - 24 - 16) / quickChips.Length;
+        string[] quickChips = { "⚡ OEE цеха", "🔍 Узкое место", "🛠️ График ТО", "🌡️ Нагрев узлов", "📦 Срыв плана" };
+        float chipSpacing = 4f;
+        float chipW = (r.width - (quickChips.Length - 1) * chipSpacing) / quickChips.Length;
         for (int i = 0; i < quickChips.Length; i++)
         {
-            Rect cr = new Rect(i * (chipW + 4), inputSectionY, chipW, 24);
+            Rect cr = new Rect(r.x + i * (chipW + chipSpacing), inputSectionY, chipW, 24);
             if (GUI.Button(cr, quickChips[i], tabStyle))
             {
                 if (quickChips[i].Contains("OEE")) AskChatQuestion("Как повысить текущий OEE завода на 5%?");
@@ -1245,8 +1322,9 @@ public class AllurAIInspector : MonoBehaviour
 
         // Поле ввода и кнопка
         float fieldY = inputSectionY + 28f;
+        float sendBtnW = 96f;
         GUI.SetNextControlName("ChatInputField");
-        Rect inputRect = new Rect(0, fieldY, r.width - 120, 32);
+        Rect inputRect = new Rect(r.x, fieldY, r.width - sendBtnW - 8f, 32);
         customQuestionInput = GUI.TextField(inputRect, customQuestionInput, inputStyle);
 
         // Обработка клавиши Enter
@@ -1261,7 +1339,7 @@ public class AllurAIInspector : MonoBehaviour
             }
         }
 
-        if (GUI.Button(new Rect(r.width - 110, fieldY, 86, 32), IsChatResponding ? "..." : "Спросить", primaryButtonStyle))
+        if (GUI.Button(new Rect(r.x + r.width - sendBtnW, fieldY, sendBtnW, 32), IsChatResponding ? "..." : "Спросить", primaryButtonStyle))
         {
             if (!string.IsNullOrWhiteSpace(customQuestionInput))
             {
